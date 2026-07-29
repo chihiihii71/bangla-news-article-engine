@@ -19,7 +19,13 @@ This project builds an end-to-end scalable analytics system that detects duplica
 
 ## ✅ Solution
 
-A two-module distributed pipeline was built on Apache Spark (32 GB session). The first module uses MinHashLSH Approximate Nearest Neighbor search to detect near-duplicate articles via Jaccard similarity, validated against exact ground-truth computed from a SciPy CSR sparse matrix. The second module applies four clustering algorithms — K-Means, Gaussian Mixture Models, HNSW graph-based clustering, and FAISS Product Quantization — across a full parameter grid of vocabulary sizes (50–5,000) and PCA dimensions (5–50), with results evaluated using both Silhouette Score (internal geometry) and Hungarian Algorithm Accuracy (external label alignment). The entire Bangla NLP preprocessing chain — two-pass Unicode cleaning, tokenisation, stopword removal, and n-gram generation — runs natively inside Spark before any ML is applied.
+- Built a **two-module distributed Big Data analytics pipeline** using **Apache Spark (32 GB session)**.
+- Detected **near-duplicate Bangla news articles** using **MinHashLSH Approximate Nearest Neighbor (ANN)** search with **Jaccard similarity**.
+- Validated duplicate detection against **exact ground-truth** computed from a **SciPy CSR sparse matrix**.
+- Evaluated **four clustering algorithms**: **K-Means**, **Gaussian Mixture Models (GMM)**, **HNSW Graph-based Clustering**, and **FAISS Product Quantization (PQ)**.
+- Conducted **large-scale parameter tuning** across **vocabulary sizes (50–5,000)** and **PCA dimensions (5–50)**.
+- Measured clustering performance using **Silhouette Score** (internal cluster quality) and **Hungarian Algorithm Accuracy** (external label alignment).
+- Developed an **end-to-end distributed Bangla NLP preprocessing pipeline** including **two-pass Unicode cleaning**, **tokenization**, **stopword removal**, and **unigram**, **bigram**, and **trigram** generation within **Apache Spark**.
 
 ---
 
