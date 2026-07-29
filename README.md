@@ -1,4 +1,4 @@
-# 📰 Bangla News Clustering — Scalable Big Data NLP Pipeline
+# 📰TextArtifact — Scalable Big Data NLP Pipeline
 
 **A production-grade distributed pipeline that automatically organises 24,000 Bangla news articles into topic clusters — replacing hours of manual editorial work with a fully automated, scalable system.**
 
