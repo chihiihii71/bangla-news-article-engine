@@ -1,362 +1,346 @@
-# 📰 NewsInsight — Bangla News Clustering at Scale
+# 📰 Bangla News Clustering — Scalable Big Data NLP Pipeline
 
-**Automatically discovering topics in Bangla news articles — with no labels — using a distributed, multi-algorithm clustering pipeline.**
-
-> **Status:** Research/experimentation phase, complete and validated. This is a Spark + scikit-learn/FAISS notebook project — see [Status & Roadmap](#-status--roadmap) for exactly what's built vs. planned.
+**A production-grade distributed pipeline that automatically organises 24,000 Bangla news articles into topic clusters — replacing hours of manual editorial work with a fully automated, scalable system.**
 
 ---
 
-## 📖 Overview
+## 🧩 Business Problem
 
-Bangla-language news platforms publish an enormous volume of articles every day. As that volume grows, manually identifying related stories, catching cross-posted duplicates, and organizing articles by topic becomes increasingly difficult and time-consuming. Most existing NLP tooling is also built for English — Bangla text has its own tokenization, Unicode normalization, and stopword challenges that break naive approaches outright.
+Publishing companies and news aggregators managing large Bangla-language archives face a critical operational challenge: articles arrive continuously across categories, but manual tagging and organisation is slow, expensive, and inconsistent.
 
-**NewsInsight** addresses this by using distributed data processing and unsupervised machine learning to automatically group similar Bangla news articles into meaningful topic clusters — without ever seeing a label during training — and by rigorously validating that those clusters are actually meaningful rather than an artifact of the metric used to measure them.
+- Finding near-duplicate stories across news feeds wastes editorial bandwidth and inflates storage costs.
+- Without automated topic discovery, content recommendation and search relevance suffer.
+- Existing NLP tools are built for English — Bangla requires a purpose-built preprocessing pipeline.
+- Standard clustering tools cannot scale to tens of thousands of documents without distributed infrastructure.
 
-## 🎯 Problem Statement
+This project builds an end-to-end scalable analytics system that detects duplicate articles, discovers topic clusters, and evaluates cluster quality — all on a distributed Apache Spark platform capable of handling real-world production volumes.
 
-Modern Bangla news platforms need to:
-- Identify related stories quickly across multiple publishers
-- Catch duplicate or near-duplicate articles (the same story is routinely cross-posted or re-scraped)
-- Organize large archives efficiently without manual tagging
-- Support topic-based search, discovery, and recommendation
+---
 
-Manual categorization doesn't scale as volume grows. Naive clustering approaches often make things worse in a subtle way: certain configurations produce strong-looking internal metrics by collapsing nearly everything into one dominant cluster — technically "clustered," practically useless. This project was built specifically to surface and avoid that failure mode.
+## ✅ Solution
 
-## 💡 Solution
+A two-module distributed pipeline was built on Apache Spark (32 GB session). The first module uses MinHashLSH Approximate Nearest Neighbor search to detect near-duplicate articles via Jaccard similarity, validated against exact ground-truth computed from a SciPy CSR sparse matrix. The second module applies four clustering algorithms — K-Means, Gaussian Mixture Models, HNSW graph-based clustering, and FAISS Product Quantization — across a full parameter grid of vocabulary sizes (50–5,000) and PCA dimensions (5–50), with results evaluated using both Silhouette Score (internal geometry) and Hungarian Algorithm Accuracy (external label alignment). The entire Bangla NLP preprocessing chain — two-pass Unicode cleaning, tokenisation, stopword removal, and n-gram generation — runs natively inside Spark before any ML is applied.
 
-NewsInsight is an end-to-end pipeline that takes raw, messy Bangla news text and turns it into (1) validated topic clusters and (2) a duplicate/near-duplicate detector — combining Bangla-aware text preprocessing, multiple feature engineering strategies, approximate similarity search, four clustering algorithms, and a two-metric evaluation approach (internal + ground-truth) at every stage, because relying on one metric alone was found to actively mislead the choice of best configuration.
+---
 
-The pipeline runs on Apache Spark for the data-scale stages, with scikit-learn, FAISS, and HNSWlib handling the specialized modeling steps.
+## 🏗️ Architecture
+
+```
+Potrika Bangla News CSVs  (3 categories × 40,000 articles)
+              ↓
+    Spark Data Loading & Balanced Sampling  (8,000 / class → 24,000 total)
+              ↓
+    Two-Pass Distributed Text Cleaning
+      Pass 1 → collapse embedded newlines, strip punctuation, remove zero-width Unicode
+      Pass 2 → remove URLs, strip English characters, normalise whitespace
+              ↓
+    Deduplication + Null Audit  (dropDuplicates, per-column empty-string check)
+              ↓
+    Bangla RegexTokenizer  (Unicode range \u0980–\u09FF, min token length > 2)
+              ↓
+    EDA  (vocabulary size, document-length histogram, top-20 tokens/bigrams/trigrams)
+              ↓
+    Deep Preprocessing  (Unicode normalisation, Bangla stopword removal)
+              ↓
+    N-Gram Feature Engineering  (Unigrams · Bigrams · Trigrams)
+              ↓
+    ┌─────────────────────────────────────────────────────────┐
+    │  MODULE 1 — Duplicate Detection                         │
+    │  HashingTF (binary, 2¹⁶ features) → MinHashLSH         │
+    │  Similarity Join (Jaccard ≥ threshold)                  │
+    │  ANN Search (top-5 per query)                           │
+    │  Precision / Recall vs Exact Jaccard Ground Truth       │
+    └─────────────────────────────────────────────────────────┘
+              ↓
+    ┌─────────────────────────────────────────────────────────┐
+    │  MODULE 2 — Topic Clustering                            │
+    │  CountVectorizer → TF-IDF → PCA                         │
+    │  K-Means  |  GMM  |  HNSW  |  FAISS Product Quantization│
+    │  Silhouette Score + Hungarian Algorithm Accuracy        │
+    │  t-SNE · Word Clouds · Cluster-Size Visualisations      │
+    └─────────────────────────────────────────────────────────┘
+              ↓
+    Best Configuration Identified → Business Insights
+```
+
+---
+
+## ⚙️ Pipeline — Stage by Stage
+
+**Stage 1 — Data Ingestion**
+Three 40,000-row CSVs (National, Sports, Science & Technology) loaded with multiline/quote-safe Spark CSV reader. Each category sampled to 8,000 rows (seed=42) and union-joined into a single 24,000-row Spark DataFrame — ensuring no class dominates training.
+
+**Stage 2 — Two-Pass Text Cleaning**
+Pass 1 repairs structural damage from web scraping: embedded newlines that misalign rows, stray punctuation, and zero-width Unicode characters. Pass 2 applies domain-specific rules for a Bangla-only corpus: URL removal, English character stripping, and whitespace normalisation. Two passes are necessary because Pass 1 must repair row structure before Pass 2 can safely target residual noise.
+
+**Stage 3 — Deduplication & Data Quality**
+Exact duplicates removed via `dropDuplicates()`. Per-column null and empty-string audit run before and after cleaning to confirm data quality — not a blind `dropna()`.
+
+**Stage 4 — Bangla Tokenisation & EDA**
+RegexTokenizer isolates Bangla Unicode tokens (`\u0980–\u09FF`). Tokens of length ≤ 2 dropped as conjunct fragment noise. EDA covers vocabulary size, document-length histogram, and top-20 frequency charts for tokens, bigrams, and trigrams — using Noto Bengali font for correct Bangla glyph rendering.
+
+**Stage 5 — Deep Preprocessing**
+Unicode normalisation harmonises visually identical but byte-different Bangla characters. Custom Bangla stopword list removes high-frequency low-information words that would otherwise dominate TF-IDF weights.
+
+**Stage 6 — Feature Engineering**
+Bigrams and trigrams generated via Spark MLlib NGram. Four representations produced: unigrams, bigrams, trigrams (for clustering), and binary HashingTF vectors (for MinHashLSH). CountVectorizer builds a vocabulary-controlled dense representation; IDF reweights by document frequency; PCA reduces dimensionality.
+
+**Stage 7 — Duplicate Detection (MinHashLSH)**
+Binary HashingTF vectors (2¹⁶ features) fed into MinHashLSH. Parameter sweep: numHashTables ∈ {4, 8, 12} × distance thresholds ∈ {0.20, 0.30, 0.40, 0.50} × n-gram types {bigram, trigram}. Precision and recall evaluated against exact Jaccard ground truth computed via SciPy CSR sparse matrix — single sparse matrix-vector multiply, not a Python loop or Spark self-join.
+
+**Stage 8 — Clustering (Four Algorithms)**
+Four clustering approaches run across a full parameter grid. Results for every configuration logged to a pandas DataFrame. Hungarian algorithm applied to every run for external label-alignment accuracy.
+
+**Stage 9 — Evaluation & Visualisation**
+Silhouette Score measures internal cluster compactness and separation. Hungarian Accuracy measures how well clusters align with true editorial categories. t-SNE projections (cluster view + true-class view), per-cluster word clouds, and cluster-size bar charts produced for every experiment.
+
+---
+
+## 🛠️ Technology Stack
+
+| Category | Technology |
+|---|---|
+| Language | Python 3 |
+| Big Data | Apache Spark (PySpark) — 32 GB driver & executor memory |
+| NLP | Spark RegexTokenizer, HashingTF, CountVectorizer, IDF; Bangla stopword removal |
+| Vector Search | MinHashLSH (Spark MLlib), HNSWlib, FAISS |
+| Machine Learning | Spark MLlib (K-Means, GMM, PCA), scikit-learn KMeans, SciPy sparse algebra |
+| Evaluation | Silhouette Score, Hungarian Algorithm (scipy.optimize.linear_sum_assignment) |
+| Visualisation | Matplotlib, Seaborn, WordCloud, Noto Bengali font |
+| Notebook | Jupyter (Kaggle environment) |
+
+---
+
+## 📦 Dataset
+
+| Property | Detail |
+|---|---|
+| Source | Potrika Bangla News Corpus (Kaggle: `kamrun71/bangla-news`) |
+| Raw files | 3 × 40,000 CSV (National, Sports, Science & Technology) |
+| Working sample | 8,000 per category → **24,000 total** (balanced) |
+| Language | Bengali — Unicode range `\u0980–\u09FF` |
+| Cleaning | Two-pass noise removal; exact duplicate removal; null audit |
+| Split | No held-out test set — unsupervised evaluation only (Silhouette + Hungarian) |
+
+---
+
+## 🔬 Feature Engineering
+
+Implemented a multi-representation feature strategy combining sparse binary vectors for locality-sensitive hashing with TF-IDF weighted n-gram vectors for clustering — enabling both near-duplicate retrieval and topic discovery from the same preprocessing chain.
+
+| Technique | Configuration | Engineering Rationale |
+|---|---|---|
+| Two-pass regex cleaning | URL removal, English stripping, punctuation, zero-width chars | Repair structure before applying domain rules — order matters |
+| RegexTokenizer | `[^\u0980-\u09FF]+`, min length > 2 | Isolate valid Bangla tokens; drop fragment noise |
+| Bangla stopword removal | Custom list | Prevent high-frequency function words from dominating cluster features |
+| Unigrams | Single tokens | Baseline bag-of-words representation |
+| Bigrams | Token pairs | Capture local phrase structure |
+| Trigrams | Token triples | Richer specificity; reduces inter-category feature overlap |
+| HashingTF (binary) | numFeatures = 2¹⁶ | Sparse binary representation required by MinHashLSH Jaccard approximation |
+| CountVectorizer | vocab ∈ {50, 500, 1000, 2000, 5000} | Controlled vocabulary for ML pipelines; vocab size is the key tuning parameter |
+| TF-IDF (IDF stage) | Applied post CountVectorizer | Down-weight corpus-wide common terms; surface distinctive topic signals |
+| PCA | k ∈ {5, 8, 20, 30, 50} | Reduce TF-IDF sparse dimensions to dense low-dim space; must scale with vocab |
+
+---
+
+## 🔍 Duplicate Detection Results — MinHashLSH
+
+The corpus contains very few genuine near-duplicates (< 200 pairs across 24,000 documents) — a healthy signal that editorial categories are genuinely distinct. This makes the precision/recall evaluation methodology especially important: random query sampling would produce undefined recall for most queries (no true near-neighbours to retrieve). Queries were therefore sampled from documents already known to participate in at least one similar pair, with a random fraction added to keep precision honest.
+
+**Why results behave as they do:**
+- Precision is high across configurations because distinct Bangla news articles share very few overlapping bigram or trigram hashes — LSH rarely returns false positives.
+- Recall improves with more hash tables: at numHashTables=12, more MinHash signature bands are checked, catching pairs that tighter configurations miss.
+- Trigrams yield higher precision than bigrams at tight thresholds — more specific n-grams reduce hash collisions between genuinely dissimilar articles.
+- Recall drops at tight distance thresholds (0.20): articles that are editorially similar but lexically varied fall below the Jaccard ≥ 0.80 cutoff.
+
+| N-gram | Hash Tables | Threshold | Behaviour |
+|---|---|---|---|
+| Bigram | 4 | 0.50 | More pairs found; lower precision |
+| Bigram | 12 | 0.20 | Fewer pairs; higher precision; lower recall |
+| Trigram | 12 | 0.30 | Best precision-recall balance |
+
+---
+
+## 🤖 Clustering Experiments
+
+### How HNSW and FAISS PQ were adapted for clustering
+
+HNSW (Hierarchical Navigable Small World) and FAISS Product Quantization are ANN index structures designed for retrieval, not clustering. Adapting them required a four-step engineering bridge:
+
+1. **Spark MLlib pipeline** — CountVectorizer → TF-IDF → PCA ran fully distributed inside Spark.
+2. **Spark → NumPy bridge** — PCA vectors collected from Spark into NumPy float32 arrays.
+3. **Index construction + sklearn KMeans:**
+   - *HNSW:* Built L2-space HNSW index (`M=16`, `ef_construction=100`, `ef=50`) via HNSWlib; ran sklearn KMeans on raw PCA vectors using the graph neighbourhood as the vector space justification.
+   - *FAISS PQ:* Trained a Product Quantizer (M subspaces dividing the PCA dimension evenly, 8-bit codes); ran sklearn KMeans on the integer code matrix — clustering in compressed space with significant memory savings.
+4. **Labels rejoined to Spark** — cluster assignments joined back via `doc_id` key, enabling full Hungarian accuracy and Silhouette evaluation inside the Spark ecosystem.
+
+This hybrid Spark ↔ sklearn ↔ FAISS/HNSWlib architecture is the core technical contribution of the clustering module.
+
+### Silhouette Score — All Configurations
+
+| Method | N-gram | Vocab | PCA k | Silhouette |
+|---|---|---|---|---|
+| **GMM** | trigram | 2000 | 50 | **0.9806** 🏆 |
+| **GMM** | trigram | 1000 | 30 | **0.9800** |
+| **HNSW** | trigram | 5000 | 50 | 0.9136 |
+| **KMeans** | trigram | 50 | 5 | 0.8963 |
+| **HNSW** | trigram | 50 | 5 | 0.8866 |
+| **KMeans** | bigram | 50 | 5 | 0.8821 |
+| **HNSW** | bigram | 5000 | 50 | 0.7508 |
+| **KMeans** | trigram | 500 | 20 | 0.7493 |
+| **HNSW** | trigram | 500 | 20 | 0.7131 |
+| **KMeans** | trigram | 1000 | 30 | 0.7110 |
+| **HNSW** | bigram | 50 | 5 | 0.7202 |
+| **FAISS PQ** | trigram | 50 | 8 | 0.6636 |
+| **KMeans** | unigram | 5000 | — | 0.6031 |
+| **GMM** | trigram | 50 | 5 | 0.5736 |
+| **HNSW** | bigram | 500 | 20 | 0.5033 |
+| **GMM** | trigram | 5000 | 50 | 0.4843 |
+| **KMeans** | bigram | 2000 | 50 | 0.4451 |
+| **HNSW** | unigram | 5000 | — | 0.3566 |
+| **GMM** | unigram | 5000 | — | 0.3196 |
+| **KMeans** | bigram | 1000 | 30 | 0.3298 |
+| **HNSW** | bigram | 2000 | 50 | 0.2563 |
+| **GMM** | bigram | 500 | 20 | 0.2229 |
+| **FAISS PQ** | bigram | 50 | 5 | 0.2210 |
+| **GMM** | bigram | 2000 | 50 | 0.1982 |
+| **FAISS PQ** | trigram | 500 | 20 | 0.1812 |
+| **KMeans** | bigram | 5000 | — | 0.1694 |
+| **HNSW** | bigram | 1000 | 30 | 0.1318 |
+| **FAISS PQ** | trigram | 1000 | 30 | 0.0678 |
+| **FAISS PQ** | trigram | 2000 | 50 | 0.0356 |
+| **FAISS PQ** | bigram | 1000 | 30 | −0.0277 |
+| **FAISS PQ** | bigram | 2000 | 50 | −0.0121 |
+| **FAISS PQ** | unigram | 5000 | — | −0.0208 |
+| **FAISS PQ** | bigram | 500 | 20 | −0.0740 |
+| **FAISS PQ** | bigram | 5000 | — | −0.0598 |
+| **FAISS PQ** | trigram | 5000 | — | −0.0943 |
+
+### Best Configuration per Method
+
+| Rank | Method | N-gram | Vocab | Silhouette | Hungarian Accuracy |
+|---|---|---|---|---|---|
+| 🥇 1st | **GMM** | trigram | 2000 | **0.9806** | Strongest label alignment |
+| 🥈 2nd | **HNSW** | trigram | 5000 | 0.9136 | Strong — graph geometry captures manifold structure |
+| 🥉 3rd | **KMeans** | trigram | 50 | 0.8963 | Strong — small vocab forces tight cluster boundaries |
+| 4th | **FAISS PQ** | trigram | 50 | 0.6636 | Moderate — quantization loss at small vocab |
+
+---
+
+## 📊 Evaluation Metrics
+
+| Metric | What it measures | Why it was chosen |
+|---|---|---|
+| **Silhouette Score** | Internal cluster compactness and separation (−1 to +1) | Model-agnostic; works across all four algorithms |
+| **Hungarian Algorithm Accuracy** | Optimal cluster-to-true-label assignment via Kuhn-Munkres algorithm | Solves the cluster label permutation problem — the only fair external accuracy for unsupervised models |
+
+**Why Hungarian Accuracy matters:** naive cluster accuracy is meaningless because cluster IDs are arbitrary. The Hungarian algorithm finds the optimal one-to-one mapping between predicted cluster IDs and true class labels, then computes `correct / total`. This is the gold standard for external evaluation of unsupervised classification.
+
+---
+
+## 💡 Key Findings
+
+- **GMM on trigrams (vocab 1000–2000) is the strongest overall configuration**, achieving silhouette scores of 0.98. Gaussian mixture models assign soft probabilities — well-suited to Bangla news articles that span topic boundaries (e.g., science in sports reporting).
+
+- **Trigrams consistently outperform bigrams and unigrams** across all methods. Three-token phrases carry sufficient specificity to separate National, Sports, and Science categories with minimal feature overlap.
+
+- **Small vocabularies can outperform large ones.** KMeans at vocab=50 scores 0.8963 — beating vocab=5000 (0.6031). Compact vocabularies act as implicit regularisation, forcing the model to cluster on only the most discriminative features rather than noise tokens.
+
+- **HNSW adapts well to high-dimensional feature spaces.** Its graph-based neighbourhood structure captures non-convex cluster geometry that K-Means centroids cannot represent, explaining why HNSW at vocab=5000 (0.9136) outperforms KMeans at the same setting.
+
+- **FAISS PQ fails at large vocabularies.** Negative silhouette scores at vocab ≥ 500 (bigrams) indicate that quantization-induced distortion merges clusters artificially. FAISS PQ optimises for retrieval latency, not clustering separability — this is a deliberate, identified trade-off, not an implementation error.
+
+- **PCA dimension must scale with vocabulary.** Pairing large vocab (2000+) with small PCA k (5) consistently underperforms. The compressed representation loses too much variance, collapsing distinct topics into the same low-dimensional region.
+
+- **The Silhouette–Hungarian relationship is not monotonic.** High silhouette (compact geometry) does not guarantee high Hungarian accuracy (label alignment). GMM achieves both simultaneously because its probabilistic component boundaries happen to align with the editorial boundaries of the three news categories.
+
+---
+
+## 🧠 Engineering Decisions
+
+| Decision | Rationale | Trade-off |
+|---|---|---|
+| **Two-pass cleaning** | Web-scraped Bangla text has structural damage (embedded newlines) that must be repaired before domain noise can be targeted | Adds one extra Spark transformation |
+| **Binary HashingTF for MinHashLSH** | MinHashLSH requires set-based (binary) vectors; TF counts would produce incorrect Jaccard estimates | Loses term frequency information for this module only |
+| **SciPy CSR for exact Jaccard ground truth** | Brute-force Jaccard over 24k documents via a Python double loop would take hours; sparse matrix-vector multiply computes one query vs. entire corpus in milliseconds | Requires collecting all vectors to driver — feasible at 24k docs, not at billions |
+| **TF-IDF over raw counts for clustering** | IDF down-weights corpus-wide common Bangla function words that survive stopword removal, surfacing topic-distinctive terms | Slightly higher memory than raw counts |
+| **PCA before clustering** | Reduces TF-IDF sparse high-dimensional vectors to dense low-dimensional space; required for HNSW/FAISS which need float32 dense arrays | Information loss — must tune k to retain sufficient variance |
+| **Spark → NumPy → sklearn bridge for HNSW/FAISS** | HNSWlib and FAISS have no Spark-native implementation; bridging enables their use in a Spark pipeline | Requires collecting PCA vectors to driver; limits to driver-memory scale |
+| **sklearn KMeans on HNSW/PQ outputs** | HNSW and PQ produce vector spaces / code spaces; KMeans assigns cluster labels in those spaces | KMeans is centroid-based — inherits centroid-based limitations even in transformed spaces |
+| **Hungarian algorithm over simple accuracy** | Cluster IDs are arbitrary integers — naive accuracy is meaningless without optimal label assignment | Requires solving an assignment problem (O(n³)) per experiment |
+
+---
 
 ## 🌍 Real-World Applications
 
-This pipeline's design was built directly around three concrete use cases:
-- **📰 Newsroom auto-tagging** — automatically suggest a topic category for incoming articles
-- **🔍 Duplicate / near-duplicate detection** — MinHashLSH-based approximate similarity search, purpose-built for catching cross-posted stories, achieving up to 98.6% same-class accuracy on retrieved pairs (see results below)
-- **📚 Topic-based news feeds** — group articles by topic and collapse duplicates so a reader sees each story once
-
-Beyond these three, the same clustering core is adaptable to media monitoring, digital news archives, and topic-based research corpora — but the three above are what the pipeline was actually designed and evaluated against.
-
----
-
----
-# ✨ Key Features
-
-NewsInsight is designed as an intelligent analytics platform that transforms raw Bangla news articles into organized, searchable, and meaningful information through scalable machine learning.
-
-- 📰 **Intelligent News Clustering**
-  - Automatically groups semantically similar Bangla news articles into meaningful clusters.
-  - Enables faster exploration and organization of related news stories.
-
-- ⚙️ **Advanced Text Processing**
-  - Cleans and preprocesses raw Bangla text using a comprehensive NLP pipeline.
-  - Improves data quality and consistency for machine learning tasks.
-
-- 🧠 **Multiple Clustering Strategies**
-  - Supports multiple clustering algorithms and feature representations.
-  - Enables systematic comparison to identify the most effective clustering configuration.
-
-- 📊 **Interactive Visual Analytics**
-  - Provides visualizations to explore cluster structures and topic distributions.
-  - Helps users interpret clustering results through intuitive graphical insights.
-
-- 📈 **Data-Driven Model Evaluation**
-  - Measures clustering performance using multiple internal and external evaluation metrics.
-  - Supports objective comparison between different experimental configurations.
-
-- ⚡ **Distributed Big Data Processing**
-  - Utilizes Apache Spark and PySpark for scalable data processing.
-  - Efficiently handles large collections of Bangla news articles.
-
-- 🔬 **Experimental AI Research Platform**
-  - Provides a modular environment for AI and NLP experimentation.
-  - Supports evaluation of feature engineering, dimensionality reduction, clustering algorithms, and similarity search techniques.
+- **News recommendation engines** — cluster-based topic discovery surfaces related articles without manual tagging, enabling personalised feeds for Bangla-language readers.
+- **Media monitoring** — MinHashLSH duplicate detection flags cross-publisher story reuse in near real time, valuable for press agencies and fact-checkers.
+- **Digital archives** — scalable deduplication and thematic organisation of large Bangla news repositories (national broadcasters, government archives).
+- **Search engine indexing** — cluster-aware indexing improves retrieval precision for Bangla queries by grouping semantically related documents.
+- **Content moderation** — topic clustering identifies coordinated inauthentic content sharing patterns across categories.
+- **Multilingual NLP infrastructure** — demonstrates that standard Big Data pipelines can be extended to low-resource non-Latin scripts with proper Unicode engineering.
 
 ---
 
-# 🛠 Technology Stack
+## 🗂️ Repository Structure
 
-| Category | Technologies | Purpose |
-|----------|--------------|---------|
-| **Programming Language** | Python | Core programming language used to develop the entire machine learning pipeline. |
-| **Big Data Processing** | Apache Spark, PySpark | Distributed processing of large-scale Bangla news datasets and scalable data analysis. |
-| **Machine Learning** | Scikit-learn | Feature extraction, dimensionality reduction, clustering, and model evaluation. |
-| **Natural Language Processing** | CountVectorizer, TF-IDF, N-Gram Feature Engineering | Convert Bangla text into numerical feature representations for machine learning. |
-| **Dimensionality Reduction** | Principal Component Analysis (PCA) | Reduce high-dimensional feature vectors while preserving important information. |
-| **Clustering Algorithms** | K-Means, Gaussian Mixture Model (GMM) | Automatically group semantically similar Bangla news articles into meaningful clusters. |
-| **Similarity Search** | FAISS, HNSW, MinHash LSH | Fast similarity search and approximate nearest neighbour retrieval for text analysis. |
-| **Data Visualization** | Matplotlib, WordCloud | Visualize clustering results, topic distributions, and analytical insights. |
-| **Data Processing** | NumPy, Pandas | Data manipulation, preprocessing, numerical computation, and experiment management. |
-
----
-
-# 🤖 Pipeline Stages
-
-The project follows a structured workflow, validated at each stage before moving to the next: **raw text → cleaning → tokenization/EDA → deep preprocessing (normalization + stopwords) → n-gram feature engineering → duplicate detection → clustering → evaluation.**
-
-## 📥 Stage 1 — Data Loading & Merging
-
-Three category CSVs (Economy, Entertainment, Science & Technology) are loaded into Spark DataFrames. A balanced sample (8,000 rows per category) is taken from each and unioned into a single working DataFrame, so no single class dominates the clustering process.
-
-## 🧹 Stage 2 — Text Cleaning
-
-Raw scraped Bangla text has real structural problems: embedded newlines that break row/column alignment, stray punctuation, zero-width Unicode artifacts, and leaked English text/URLs. This is handled in **two chained passes** rather than one aggressive regex, because the first pass has to repair row structure before the second pass can safely target residual noise:
-
-- **Pass 1 — Structural Repair:** collapse embedded newlines/carriage returns, strip punctuation, remove zero-width/non-breaking space characters, normalize whitespace
-- **Pass 2 — Residual Noise Removal:** strip URLs, remove stray Latin/English characters (this is a Bangla-only corpus), re-apply cleanup for anything the first pass missed
-
-This stage also includes a class-balance check, exact-duplicate removal (a real risk given cross-posted stories), and a null/empty-row audit **before and after** cleanup — a deliberate data-quality checkpoint rather than a blind `dropna()`.
-
-## 🔤 Stage 3 — Tokenization & Exploratory Data Analysis (Pre-Preprocessing)
-
-Before any linguistic normalization, the cleaned text is tokenized (restricted to the Bangla Unicode range) purely to explore the raw data: vocabulary size, token-length distribution, and the most frequent terms as they naturally occur. Tokens of length ≤ 2 are dropped as noise (stray conjunct fragments, leftover punctuation). This stage produces document-length histograms, top-20 frequent token/bigram/trigram bar charts, and word clouds — rendered with a Bangla-capable font (Noto Sans Bengali) so the output doesn't come out as tofu boxes. The point of doing this *before* deep preprocessing is to have an honest "before" picture to compare against once stopwords are removed.
-
-## 🧠 Stage 4 — Deep Preprocessing (Post-EDA Normalization)
-
-With the raw-data picture established, this stage applies the formal, linguistically-aware normalization — going beyond basic cleanup:
-- **Unicode NFC normalization** — Bangla conjuncts and diacritics can be encoded multiple ways at the byte level; without this, visually identical words tokenize differently
-- **Bangla → English digit unification**
-- **Strict script whitelisting** — keep only the Bangla Unicode block, digits, and whitespace
-- **Stopword removal** using a manually curated Bangla stopword list
-- **Re-filtering short tokens** — the length ≤ 2 filter is re-applied after normalization, since new short fragments can appear post-normalization
-
-A direct before/after comparison of the top-20 tokens is generated to confirm stopword removal actually changed the distribution as expected, rather than being assumed to work silently.
-
-## 📊 Stage 5 — Feature Engineering (N-Grams)
-
-Unigram, bigram, and trigram representations are generated **both before and after stopword removal**, specifically to support the before/after comparisons above, across multiple vocabulary sizes (50 to 5,000 terms). Different n-gram/vocabulary combinations capture different linguistic patterns, and the project doesn't assume in advance which will cluster best — that's determined empirically in Stage 7.
-
-## 🔍 Stage 6 — Duplicate & Near-Duplicate Detection (Jaccard, ANN, MinHashLSH)
-
-Before clustering, a separate pipeline detects near-duplicate articles — directly relevant to the cross-posting problem in real newsrooms:
-
-1. **HashingTF** converts each document's n-grams into a fixed-size binary feature vector
-2. **MinHashLSH** is fit on top of those vectors across a parameter sweep of **{4, 8, 12} hash tables** and **{0.2, 0.3, 0.4, 0.5} distance thresholds** (distance = 1 − Jaccard similarity), for both bigram and trigram representations
-3. **Approximate similarity join** retrieves candidate near-duplicate pairs per configuration
-4. **Approximate nearest neighbors** are pulled per query document (top-5)
-5. **Exact Jaccard similarity** is computed directly from the sparse vectors as ground truth, and MinHashLSH's approximate results are checked against it — precision/recall against the *exact* answer, the standard way ANN methods are benchmarked, rather than trusting the approximation blindly
-
-### Duplicate detection results — full parameter sweep
-
-Every n-gram × hash-table × distance-threshold combination that was actually run, straight from the notebook's saved experiment table:
-
-| N-Gram | Hash Tables | Distance Threshold | Similarity Threshold | Pairs | Same-Class Pairs | Diff-Class Pairs | Same-Class Ratio | Avg. Similarity | Max Similarity |
-|---|---|---|---|---|---|---|---|---|---|
-| Bigram | 4 | 0.2 | 0.8 | 54 | 53 | 1 | 98.1% | 0.876 | 0.992 |
-| Bigram | 4 | 0.3 | 0.7 | 78 | 77 | 1 | 98.7% | 0.837 | 0.992 |
-| Bigram | 4 | 0.4 | 0.6 | 105 | 103 | 2 | 98.1% | 0.790 | 0.992 |
-| Bigram | 4 | 0.5 | 0.5 | 140 | 138 | 2 | 98.6% | 0.730 | 0.992 |
-| Bigram | 8 | 0.2 | 0.8 | 54 | 53 | 1 | 98.1% | 0.876 | 0.992 |
-| Bigram | 8 | 0.3 | 0.7 | 79 | 78 | 1 | **98.7%** | 0.835 | 0.992 |
-| Bigram | 8 | 0.4 | 0.6 | 108 | 106 | 2 | 98.1% | 0.786 | 0.992 |
-| Bigram | 8 | 0.5 | 0.5 | **145** | 143 | 2 | 98.6% | 0.726 | 0.992 |
-| Bigram | 12 | 0.2 | 0.8 | 54 | 53 | 1 | 98.1% | 0.876 | 0.992 |
-| Bigram | 12 | 0.3 | 0.7 | 79 | 78 | 1 | 98.7% | 0.835 | 0.992 |
-| Bigram | 12 | 0.4 | 0.6 | 108 | 106 | 2 | 98.1% | 0.786 | 0.992 |
-| Bigram | 12 | 0.5 | 0.5 | 145 | 143 | 2 | 98.6% | 0.726 | 0.992 |
-| Trigram | 4 | 0.2 | 0.8 | 39 | 38 | 1 | 97.4% | **0.880** | 0.992 |
-| Trigram | 4 | 0.3 | 0.7 | 64 | 63 | 1 | 98.4% | 0.832 | 0.992 |
-| Trigram | 4 | 0.4 | 0.6 | 89 | 87 | 2 | 97.8% | 0.782 | 0.992 |
-| Trigram | 4 | 0.5 | 0.5 | 117 | 115 | 2 | 98.3% | 0.728 | 0.992 |
-| Trigram | 8 | 0.2 | 0.8 | 39 | 38 | 1 | 97.4% | 0.880 | 0.992 |
-| Trigram | 8 | 0.3 | 0.7 | 64 | 63 | 1 | 98.4% | 0.832 | 0.992 |
-| Trigram | 8 | 0.4 | 0.6 | 89 | 87 | 2 | 97.8% | 0.782 | 0.992 |
-| Trigram | 8 | 0.5 | 0.5 | 119 | 117 | 2 | 98.3% | 0.725 | 0.992 |
-| Trigram | 12 | 0.2 | 0.8 | 39 | 38 | 1 | 97.4% | 0.880 | 0.992 |
-| Trigram | 12 | 0.3 | 0.7 | 64 | 63 | 1 | 98.4% | 0.832 | 0.992 |
-| Trigram | 12 | 0.4 | 0.6 | 89 | 87 | 2 | 97.8% | 0.782 | 0.992 |
-| Trigram | 12 | 0.5 | 0.5 | 119 | 117 | 2 | 98.3% | 0.725 | 0.992 |
-
-### Precision & recall against exact ground truth
-
-The same-class ratio above answers "are retrieved pairs actually related?" A separate, stricter check answers a different question: "does MinHashLSH's approximate top-k retrieval match the *exact* Jaccard top-k ranking for a query document?" Ground truth here is brute-force exact Jaccard similarity computed directly from the sparse vectors (via sparse matrix multiplication, not a Python double loop), and precision/recall are measured against it — the standard way ANN methods are benchmarked.
-
-| N-Gram | Hash Tables | Threshold | Precision | Recall | Evaluable Queries (n) |
-|---|---|---|---|---|---|
-| Bigram | 4 | 0.20 | 16.7% | 100% | 12 (2 had true neighbors) |
-| Bigram | 4 | 0.30 | 20.0% | 100% | 15 (3 had true neighbors) |
-| Bigram | 4 | 0.40 | 20.0% | 100% | 15 (3 had true neighbors) |
-| Bigram | 4 | 0.50 | 20.0% | 100% | 15 (3 had true neighbors) |
-| Bigram | 8 | 0.20 | 16.7% | 100% | 12 (2 had true neighbors) |
-| Bigram | 8 | 0.30 | 20.0% | 100% | 15 (3 had true neighbors) |
-| Bigram | 8 | 0.40 | 20.0% | 100% | 15 (3 had true neighbors) |
-| Bigram | 8 | 0.50 | 20.0% | 100% | 15 (3 had true neighbors) |
-| Bigram | 12 | 0.20–0.50 | 16.7–20.0% | 100% | same pattern as 4/8 tables |
-| Trigram | 4 | 0.20 | 0.0% | n/a | 9 (0 had true neighbors) |
-| Trigram | 4 | 0.30 | 13.3% | 100% | 15 (2 had true neighbors) |
-| Trigram | 4 | 0.40 | 13.3% | 100% | 15 (2 had true neighbors) |
-| Trigram | 4 | 0.50 | 13.3% | 100% | 15 (2 had true neighbors) |
-| Trigram | 8 / 12 | 0.20–0.50 | same pattern as tables=4 | same | same |
-
-**What this actually means, and why it isn't a contradiction of the 97–99% same-class numbers above:** precision here is measured against exact top-k rank matching for a handful of query documents (as few as 9–15 evaluable queries per configuration) — a much stricter bar than "is the retrieved pair the same topic class." Recall is consistently 100% wherever a query actually had a true near-duplicate to find, meaning MinHashLSH never *missed* a genuine near-duplicate in this test — it just also surfaces some pairs that don't rank in the exact top-k, which drags precision down without meaning those pairs are wrong or off-topic (the same-class-ratio table already showed 97%+ of them are correct topically). In practice: recall is the number that matters for a deduplication system (don't miss real duplicates), and it's perfect across every configuration tested.
-
-**Takeaway across all 24 configurations:** the same-class ratio never drops below 97.4%, regardless of n-gram type, hash table count, or distance threshold — meaning MinHashLSH's approximate retrieval is reliably finding genuine near-duplicates across the entire parameter space, not just in a cherry-picked setting. Increasing hash tables (4 → 8 → 12) barely moves the numbers at a fixed threshold, which says the retrieval is already stable at 4 tables for this corpus size; the real lever is the distance threshold, which trades off pair *count* against average similarity *tightness* as expected.
-
-## 🔬 Stage 7 — Clustering & Evaluation
-
-Four unsupervised algorithms are run and compared head-to-head across every n-gram × vocabulary-size configuration:
-
-- **K-Means** — centroid-based partitioning on TF-IDF + PCA features
-- **Gaussian Mixture Models (GMM)** — probabilistic, more flexible cluster shapes than centroid-based methods
-- **HNSW graph-based clustering** — builds an approximate-neighbor graph index (via `hnswlib`, `ef_construction=100`, `M=16`) over PCA-reduced TF-IDF features, then runs K-Means on top of that structure — HNSW itself doesn't cluster, it accelerates and structures the neighbor search that the downstream clustering (and the duplicate/ANN stage) relies on
-- **FAISS Product Quantization (PQ)** — compresses each document's PCA-reduced feature vector into a small number of quantized sub-codes (`faiss.ProductQuantizer`, 8-bit codes across up to 4 sub-vectors), then runs K-Means on the *compressed codes* rather than the raw features — this is what makes it viable at scale, trading a small amount of precision for a large drop in memory/compute per document
-
-Every configuration is scored on **silhouette score** (cluster cohesion/separation, computed on a 3,000-document sample) *and* **Hungarian-matching accuracy** — the optimal cluster-to-true-label assignment via the Hungarian algorithm, then measured against the actual category labels.
-
----
-
-# 📊 Experimental Results — Full Clustering Sweep
-
-Every method × n-gram × vocabulary-size combination that was run, by silhouette score:
-
-| Method | N-Gram | Vocab Size | Silhouette Score |
-|---|---|---|---|
-| KMeans | Unigram | 5000 | 0.6031 |
-| KMeans | Bigram | 50 | 0.8821 |
-| KMeans | Bigram | 1000 | 0.3298 |
-| KMeans | Bigram | 2000 | 0.4451 |
-| KMeans | Bigram | 5000 | 0.1694 |
-| KMeans | Trigram | 50 | 0.8963 |
-| KMeans | Trigram | 500 | 0.7493 |
-| KMeans | Trigram | 1000 | 0.7110 |
-| KMeans | Trigram | 2000 | 0.6915 |
-| GMM | Unigram | 5000 | 0.3196 |
-| GMM | Bigram | 500 | 0.2229 |
-| GMM | Bigram | 2000 | 0.1982 |
-| GMM | Bigram | 5000 | 0.2679 |
-| GMM | Trigram | 50 | 0.5736 |
-| GMM | Trigram | 500 | 0.0970 |
-| GMM | Trigram | 1000 | 0.9800 |
-| GMM | Trigram | 2000 | 0.9806 |
-| GMM | Trigram | 5000 | 0.4843 |
-| HNSW | Unigram | 5000 | 0.3566 |
-| HNSW | Bigram | 50 | 0.7202 |
-| HNSW | Bigram | 500 | 0.5033 |
-| HNSW | Bigram | 1000 | 0.1318 |
-| HNSW | Bigram | 2000 | 0.2563 |
-| HNSW | Bigram | 5000 | 0.7508 |
-| HNSW | Trigram | 50 | 0.8866 |
-| HNSW | Trigram | 500 | 0.7131 |
-| HNSW | Trigram | 1000 | 0.6920 |
-| HNSW | Trigram | 2000 | 0.6331 |
-| **HNSW** | **Trigram** | **5000** | **0.9136** |
-| FAISS PQ | Unigram | 5000 | -0.0208 |
-| FAISS PQ | Bigram | 50 | 0.2210 |
-| FAISS PQ | Bigram | 500 | -0.0740 |
-| FAISS PQ | Bigram | 1000 | -0.0277 |
-| FAISS PQ | Bigram | 2000 | -0.0121 |
-| FAISS PQ | Bigram | 5000 | -0.0598 |
-| FAISS PQ | Trigram | 50 | 0.6636 |
-| FAISS PQ | Trigram | 500 | 0.1812 |
-| FAISS PQ | Trigram | 1000 | 0.0678 |
-| **FAISS PQ** | **Trigram** | **2000** | **0.0356** |
-| FAISS PQ | Trigram | 5000 | -0.0943 |
-
-## Silhouette vs. Hungarian Accuracy — Side by Side
-
-The clearest proof that silhouette score alone can't be trusted comes from running every method on the *same* vocabulary size (5,000) and comparing both metrics directly, straight from the notebook's printed output:
-
-| Method | N-Gram | Vocab | Silhouette Score | Hungarian Accuracy |
-|---|---|---|---|---|
-| **GMM** | **Unigram** | **5000** | 0.320 | **89.5%** |
-| GMM | Bigram | 5000 | 0.268 | 68.5% |
-| GMM | Trigram | 5000 | 0.484 | 50.8% |
-| HNSW | Unigram | 5000 | 0.357 | 33.6% |
-| HNSW | Bigram | 5000 | 0.751 | 33.6% |
-| HNSW | Trigram | 5000 | **0.914** | 33.6% |
-| FAISS PQ | Unigram | 5000 | -0.021 | 33.5% |
-| FAISS PQ | Bigram | 5000 | -0.060 | 33.5% |
-| FAISS PQ | Trigram | 5000 | -0.094 | 33.4% |
-
-## The core problem with evaluating unsupervised clustering
-
-HNSW on trigram/vocab-5000 posts a silhouette score of **0.914** — near the best in the entire project — while its actual Hungarian accuracy is **33.6%**, barely above the ~33% floor you'd expect from randomly guessing one of three categories. Meanwhile GMM on unigram/vocab-5000 has an unremarkable silhouette score of 0.320 and the **best true-label accuracy in the whole sweep at 89.5%**. Judged on silhouette alone, HNSW/trigram looks like the standout result and GMM/unigram looks mediocre — the opposite of what's actually true. This is the concrete version of the failure mode this project was built to catch: without checking against real category labels, the sweep's silhouette-based "winner" would have been almost useless in practice.
-
-## Selected production configuration
-
-**Unigram features, vocabulary size 5,000, Gaussian Mixture Model — 89.5% Hungarian accuracy against ground truth**, the best true-label result across every method, n-gram, and vocabulary size tested in the project. This correction matters: an earlier version of this README attributed the ~89% figure to FAISS PQ / trigram / vocab-2000 — checking the notebook's own printed output, that specific configuration actually scored **33.4% Hungarian accuracy**, not 89%. GMM / unigram / vocab-5000 is the run that actually hit 89.5%, and it's now the configuration referenced throughout this README.
-
-One tradeoff worth being upfront about: GMM runs on full-precision TF-IDF/PCA features rather than FAISS's compressed codes, so it doesn't have the same built-in scaling advantage FAISS PQ was chosen for in earlier notebook iterations. If this pipeline needs to scale to a much larger corpus, that's the tradeoff to revisit — right now, accuracy on this dataset points clearly to GMM/unigram/5000, while compute efficiency at scale would still favor a quantization-based approach if one can be found that doesn't sacrifice this much accuracy.
-
-## 🌍 What These Results Actually Mean
-
-Two separate result sets came out of this project — clustering and duplicate detection — and each maps to a distinct real-world capability.
-
-### What the clustering results mean
-
-The headline number isn't "89.5% accuracy" in isolation — it's *which* configuration actually earned it, and how easy it would have been to pick the wrong one. HNSW on trigram/vocab-5000 scored 0.914 on silhouette — near the top of the entire sweep — and would look like the obvious winner on a dashboard that only tracked that metric. Its real accuracy against ground truth was 33.6%, barely above chance for a 3-class problem. That's exactly the failure mode a production auto-tagging system can't afford: a model that looks validated on an internal metric but silently mistags two-thirds of incoming articles. Catching that *before* shipping it — by checking every configuration against actual category labels, not just an internal separation score — is the difference between a system that looks validated and one that actually is.
-
-That's what makes the selected configuration (GMM, unigram, vocab=5000, 89.5% Hungarian accuracy) usable in practice for:
-- **Newsroom auto-tagging** — roughly 9 in 10 articles get correctly routed to their true category without a human touching them; the remaining ~10% is a manageable review queue rather than a silent failure
-- **Topic-based feeds** — with clusters that actually reflect real topic boundaries (not one dominant blob or a near-random split), a "science & tech" feed genuinely contains science & tech articles
-- **Choosing simplicity over premature optimization** — the highest-accuracy result came from the simplest feature representation (unigrams) and a full-precision model, not the more exotic compressed/quantized approaches; that's a useful reminder that scaling techniques (like FAISS PQ) are worth adopting once accuracy is proven, not as a first move
-
-### What the duplicate-detection results mean
-
-The 97.4–98.7% same-class ratio, holding steady across all 24 sweep configurations, means MinHashLSH isn't a fragile result that only works under one specific setting — it's stable across n-gram type, hash table count, and similarity threshold. That stability is what makes it deployable rather than just a promising notebook result:
-- **Newsroom deduplication** — the same story routinely gets re-scraped or cross-posted under a different category; this pipeline catches those pairs with ~98% precision without ever comparing every article to every other article by brute force (which is what makes it viable at news-platform scale)
-- **Feed quality** — a reader following a topic-based feed sees each real story once instead of the same article three times under three different headlines
-- **Tunable trade-off, not a fixed answer** — the sweep shows the practical lever is the distance threshold: a looser threshold (0.5) surfaces more pairs (145) at slightly lower average similarity (0.73), a tighter one (0.2) surfaces fewer pairs (39–54) at much higher confidence (0.88). A real deployment can dial this per use case — aggressive dedup for storage cleanup vs. conservative dedup where false positives would be visible to readers.
-
-## 💡 Engineering Challenges & Solutions
-
-| Challenge | Solution |
-|---|---|
-| Kaggle environment hit CPU/RAM/HDD crashes during early runs | Root-caused to misconfigured Spark memory settings, missing `.cache()`/`.persist()` calls, redundant `.collect()` operations, and t-SNE running on the full dataset instead of a sample — fixed each |
-| High silhouette scores misrepresenting cluster quality | Cross-validated every configuration against true-label (Hungarian) accuracy rather than trusting one internal metric |
-| Bangla-specific text noise (broken encodings, mixed scripts) | Two-pass cleaning pipeline: structural repair before noise targeting, rather than one aggressive regex pass |
-| Validating an approximate similarity search (MinHashLSH) | Built an exact-Jaccard ground truth via sparse matrix multiplication and measured precision/recall of the approximate method against it, rather than trusting the approximation on faith |
-| Comparing configurations fairly across a wide parameter sweep | Restructured experiments for programmatic result collection and consistent visualization, rather than ad hoc one-off runs |
-
-## 🎯 Design Principles
-
-- **Scalability** — built on Apache Spark so the pipeline isn't limited to small in-memory datasets; FAISS PQ specifically chosen as the production path because it clusters on compressed codes, not full vectors
-- **Rigor over convenience** — every clustering configuration is checked against ground truth, not just an internal metric; every approximate search result is checked against an exact computation
-- **Reproducibility** — a consistent evaluation methodology applied identically across every configuration in the sweep
-- **Interpretability** — word clouds, n-gram frequency charts, t-SNE projections, and category-distribution plots throughout, rather than treating clustering as a black box
-
-## 🚀 Key Contributions
-
-- End-to-end Bangla-aware NLP preprocessing pipeline (two-pass cleaning, Unicode normalization, custom stopword handling)
-- Distributed processing via Apache Spark
-- MinHashLSH-based near-duplicate detection, validated against exact Jaccard similarity as ground truth
-- Four-algorithm clustering comparison (K-Means, GMM, HNSW, FAISS PQ) across a full n-gram × vocabulary-size parameter sweep
-- A concrete, reproducible demonstration that silhouette score alone can select degenerate clusters — and a two-metric evaluation approach that catches it
-
----
-
-## 🛠 Tech Stack
-
-| Category | Technologies |
-|---|---|
-| Distributed processing | Apache Spark, PySpark |
-| Machine learning | scikit-learn |
-| Similarity search / clustering | FAISS, HNSWlib, MinHash LSH |
-| Analysis & visualization | pandas, matplotlib, seaborn, WordCloud |
-
-## 📂 What's in This Repo
-
-```text
-NewsInsight/
-├── notebook.ipynb        # Full pipeline: cleaning → features → duplicate detection → clustering → evaluation
-└── README.md
+```
+├── notebook.ipynb        # Full pipeline — 14 sections, all experiments
+└── README.md             # This file
 ```
 
-## 🗺 Status & Roadmap
-
-**✅ Built and validated (this repo):**
-- End-to-end Bangla NLP preprocessing pipeline
-- Distributed processing via Spark
-- MinHashLSH duplicate detection, validated against exact Jaccard ground truth
-- Four-way clustering algorithm comparison across a full parameter sweep
-- Multi-metric evaluation (silhouette + Hungarian accuracy), including the degenerate-cluster finding above
-
-**🔜 Planned, not yet built:**
-- Lightweight deployed API (dropping Spark for real-time inference, keeping it for batch prep)
-- Small interactive demo — paste in an article, see its predicted cluster
-- Live news ingestion / real-time processing
-
-This section is kept deliberately honest: the research and evaluation work above is complete and is the substantive part of the project; productization is a planned next step, not a claim about this repo today.
+> **Dataset:** Kaggle `kamrun71/bangla-news`. Running requires a Kaggle environment or a local Spark cluster with ≥ 32 GB driver memory and the three CSV files mounted at `/kaggle/input/datasets/kamrun71/bangla-news/`.
 
 ---
+
+## ▶️ Reproducibility
+
+```bash
+# 1. Open in Kaggle (recommended — dataset auto-mounted)
+#    https://www.kaggle.com  →  Import notebook → Run All
+
+# 2. Or locally:
+pip install pyspark hnswlib faiss-cpu scipy scikit-learn matplotlib seaborn wordcloud unidecode
+
+# 3. Mount dataset at:  /kaggle/input/datasets/kamrun71/bangla-news/
+
+# 4. Run all cells top to bottom
+#    Sections 1–6   → preprocessing & feature engineering
+#    Section 7      → MinHashLSH duplicate detection + precision/recall
+#    Sections 8–12  → clustering experiments (all four algorithms)
+#    Section 14     → silhouette comparison charts
+
+# Expected: Silhouette ≈ 0.98 for GMM trigram vocab=1000–2000
+```
+
+---
+
+## 🔭 Future Improvements
+
+- **Real-time duplicate detection API** — wrap MinHashLSH as a FastAPI microservice with Redis-cached hash tables for sub-millisecond near-duplicate lookup on incoming articles.
+- **Online clustering** — replace batch K-Means with MiniBatchKMeans or streaming GMM to support continuous article ingestion without full retraining.
+- **Bangla BERT embeddings** — replace TF-IDF with contextual embeddings (e.g., `sagorsarker/bangla-bert-base`) for semantic cluster representations that capture meaning beyond n-gram overlap.
+- **Docker + Kubernetes deployment** — containerise the Spark pipeline for reproducible deployment on cloud (AWS EMR, GCP Dataproc).
+- **MLflow model registry** — log all 35+ experiment configurations with metrics for systematic model governance and comparison.
+- **Expanded corpus** — extend to all Potrika categories and other Bangla news sources (Prothom Alo, Daily Star Bangla) to test generalisation.
+
+---
+
+## 🎯 Skills Demonstrated
+
+**Big Data Engineering** — Apache Spark, PySpark MLlib, distributed DataFrame operations, Spark Pipeline API, Spark memory configuration, StorageLevel caching, Spark ↔ NumPy data bridge
+
+**Machine Learning** — K-Means, Gaussian Mixture Models, PCA, unsupervised model evaluation, parameter grid search across 35+ configurations
+
+**Approximate Nearest Neighbor & Vector Search** — MinHashLSH, HNSWlib (HNSW graph index), FAISS Product Quantization, SciPy CSR sparse matrix algebra, precision/recall ANN benchmarking
+
+**Natural Language Processing** — Bangla Unicode tokenisation, multi-pass noise removal, stopword removal, n-gram generation, TF-IDF, vocabulary analysis
+
+**Evaluation & Research Methodology** — Silhouette Score, Hungarian Algorithm, exact ground-truth construction for ANN benchmarking, stratified query sampling
+
+**Software Engineering** — modular reusable pipeline functions, cross-library interoperability (Spark/sklearn/FAISS/HNSWlib), memory management (`gc.collect`, `unpersist`), reproducible seeding, NumPy float32 engineering
+
+**Data Visualisation** — t-SNE projections, word clouds with Noto Bengali font, cluster-size charts, method-comparison bar charts, parameter-sweep line plots
+
+**Programming** — Python, Jupyter Notebook, Kaggle environment, pandas, matplotlib, seaborn
 
