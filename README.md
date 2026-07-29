@@ -1,794 +1,311 @@
-# 📰 NewsInsight
+# 📰 NewsInsight — Bangla News Clustering at Scale
 
-### AI-Powered Bangla News Intelligence Platform
+**Automatically discovering topics in Bangla news articles — with no labels — using a distributed, multi-algorithm clustering pipeline.**
 
-> **Automatically discover, organize, and analyze Bangla news articles using scalable machine learning and distributed data processing.**
-
-<p align="center">
-
-<!-- Replace with your banner image later -->
-
-<img src="docs/images/banner.png" alt="NewsInsight Banner" width="100%"/>
-
-</p>
-
-<p align="center">
-
-<!-- Replace these links after deployment -->
-
-<a href="#"><img src="https://img.shields.io/badge/Demo-Coming%20Soon-blue?style=for-the-badge"></a> <a href="#"><img src="https://img.shields.io/badge/Documentation-Coming%20Soon-success?style=for-the-badge"></a> <a href="#"><img src="https://img.shields.io/badge/License-MIT-orange?style=for-the-badge"></a>
-
-</p>
+> **Status:** Research/experimentation phase, complete and validated. This is a Spark + scikit-learn/FAISS notebook project — see [Status & Roadmap](#-status--roadmap) for exactly what's built vs. planned.
 
 ---
 
 ## 📖 Overview
 
-Every day, thousands of Bangla news articles are published across numerous online news platforms. As the volume of information continues to grow, manually identifying related stories, discovering emerging topics, and organizing articles becomes increasingly difficult and time-consuming.
+Bangla-language news platforms publish an enormous volume of articles every day. As that volume grows, manually identifying related stories, catching cross-posted duplicates, and organizing articles by topic becomes increasingly difficult and time-consuming. Most existing NLP tooling is also built for English — Bangla text has its own tokenization, Unicode normalization, and stopword challenges that break naive approaches outright.
 
-**NewsInsight** addresses this challenge by using machine learning and distributed data processing to automatically group similar Bangla news articles into meaningful clusters. The platform transforms large collections of unstructured news into organized topics that can be explored, analyzed, and visualized more efficiently.
-
-Rather than focusing only on machine learning experiments, NewsInsight demonstrates how artificial intelligence can be applied to solve real-world information management problems through an end-to-end intelligent analytics pipeline.
-
----
+**NewsInsight** addresses this by using distributed data processing and unsupervised machine learning to automatically group similar Bangla news articles into meaningful topic clusters — without ever seeing a label during training — and by rigorously validating that those clusters are actually meaningful rather than an artifact of the metric used to measure them.
 
 ## 🎯 Problem Statement
 
-Modern digital news platforms publish an enormous number of articles every day. These articles often cover the same events from different perspectives, making it difficult to:
+Modern Bangla news platforms need to:
+- Identify related stories quickly across multiple publishers
+- Catch duplicate or near-duplicate articles (the same story is routinely cross-posted or re-scraped)
+- Organize large archives efficiently without manual tagging
+- Support topic-based search, discovery, and recommendation
 
-* Identify related news stories quickly.
-* Discover trending topics across multiple publishers.
-* Organize large news collections efficiently.
-* Reduce duplicated information.
-* Support large-scale news analysis.
-
-Traditional manual categorization is time-consuming and difficult to scale as the volume of news continues to increase.
-
----
+Manual categorization doesn't scale as volume grows. Naive clustering approaches often make things worse in a subtle way: certain configurations produce strong-looking internal metrics by collapsing nearly everything into one dominant cluster — technically "clustered," practically useless. This project was built specifically to surface and avoid that failure mode.
 
 ## 💡 Solution
 
-NewsInsight provides an intelligent machine learning pipeline that automatically analyzes Bangla news articles and groups similar content into meaningful clusters.
+NewsInsight is an end-to-end pipeline that takes raw, messy Bangla news text and turns it into (1) validated topic clusters and (2) a duplicate/near-duplicate detector — combining Bangla-aware text preprocessing, multiple feature engineering strategies, approximate similarity search, four clustering algorithms, and a two-metric evaluation approach (internal + ground-truth) at every stage, because relying on one metric alone was found to actively mislead the choice of best configuration.
 
-The platform combines text preprocessing, feature engineering, dimensionality reduction, clustering algorithms, and visualization techniques to transform raw news articles into structured insights that are easier to explore and understand.
-
-By leveraging distributed processing with Apache Spark, the system is designed to efficiently process large-scale datasets while maintaining flexibility for experimentation with multiple clustering techniques.
-
----
+The pipeline runs on Apache Spark for the data-scale stages, with scikit-learn, FAISS, and HNSWlib handling the specialized modeling steps.
 
 ## 🌍 Real-World Applications
 
-NewsInsight can be adapted for a variety of real-world scenarios, including:
+This pipeline's design was built directly around three concrete use cases:
+- **📰 Newsroom auto-tagging** — automatically suggest a topic category for incoming articles
+- **🔍 Duplicate / near-duplicate detection** — MinHashLSH-based approximate similarity search, purpose-built for catching cross-posted stories, achieving up to 98.6% same-class accuracy on retrieved pairs (see results below)
+- **📚 Topic-based news feeds** — group articles by topic and collapse duplicates so a reader sees each story once
 
-* 📰 Digital News Platforms
-* 📈 News Trend Analysis
-* 🔍 Intelligent News Search
-* 📚 Digital News Archives
-* 🧑‍💼 Media Monitoring
-* 🏛 Government & Public Information Analysis
-* 🎓 Academic Research
-* 🤖 AI-Powered News Recommendation Systems
+Beyond these three, the same clustering core is adaptable to media monitoring, digital news archives, and topic-based research corpora — but the three above are what the pipeline was actually designed and evaluated against.
 
 ---
 
-## ⭐ Why This Project Matters
+# 🤖 Pipeline Stages
 
-This project demonstrates how machine learning can move beyond experimentation and become part of a practical intelligent system capable of organizing large volumes of unstructured textual information.
+The project follows a structured workflow, validated at each stage before moving to the next: **raw text → cleaning → tokenization/EDA → deep preprocessing (normalization + stopwords) → n-gram feature engineering → duplicate detection → clustering → evaluation.**
 
----
+## 📥 Stage 1 — Data Loading & Merging
 
-# ✨ Key Features
+Three category CSVs (Economy, Entertainment, Science & Technology) are loaded into Spark DataFrames. A balanced sample (8,000 rows per category) is taken from each and unioned into a single working DataFrame, so no single class dominates the clustering process.
 
-NewsInsight is designed as an intelligent analytics platform that transforms raw Bangla news articles into organized, searchable, and meaningful information through scalable machine learning.
+## 🧹 Stage 2 — Text Cleaning
 
-### 📰 Intelligent News Clustering
+Raw scraped Bangla text has real structural problems: embedded newlines that break row/column alignment, stray punctuation, zero-width Unicode artifacts, and leaked English text/URLs. This is handled in **two chained passes** rather than one aggressive regex, because the first pass has to repair row structure before the second pass can safely target residual noise:
 
-Automatically groups semantically similar Bangla news articles into meaningful clusters, enabling faster exploration of related stories.
+- **Pass 1 — Structural Repair:** collapse embedded newlines/carriage returns, strip punctuation, remove zero-width/non-breaking space characters, normalize whitespace
+- **Pass 2 — Residual Noise Removal:** strip URLs, remove stray Latin/English characters (this is a Bangla-only corpus), re-apply cleanup for anything the first pass missed
 
-### ⚙ Advanced Text Processing
+This stage also includes a class-balance check, exact-duplicate removal (a real risk given cross-posted stories), and a null/empty-row audit **before and after** cleanup — a deliberate data-quality checkpoint rather than a blind `dropna()`.
 
-Prepares raw Bangla text using a complete preprocessing pipeline to improve the quality and consistency of machine learning models.
+## 🔤 Stage 3 — Tokenization & Exploratory Data Analysis (Pre-Preprocessing)
 
-### 🧠 Multiple Clustering Strategies
+Before any linguistic normalization, the cleaned text is tokenized (restricted to the Bangla Unicode range) purely to explore the raw data: vocabulary size, token-length distribution, and the most frequent terms as they naturally occur. Tokens of length ≤ 2 are dropped as noise (stray conjunct fragments, leftover punctuation). This stage produces document-length histograms, top-20 frequent token/bigram/trigram bar charts, and word clouds — rendered with a Bangla-capable font (Noto Sans Bengali) so the output doesn't come out as tofu boxes. The point of doing this *before* deep preprocessing is to have an honest "before" picture to compare against once stopwords are removed.
 
-Supports experimentation with multiple clustering algorithms and feature representations to identify the most effective configuration for large-scale news analysis.
+## 🧠 Stage 4 — Deep Preprocessing (Post-EDA Normalization)
 
-### 📊 Interactive Visual Analytics
+With the raw-data picture established, this stage applies the formal, linguistically-aware normalization — going beyond basic cleanup:
+- **Unicode NFC normalization** — Bangla conjuncts and diacritics can be encoded multiple ways at the byte level; without this, visually identical words tokenize differently
+- **Bangla → English digit unification**
+- **Strict script whitelisting** — keep only the Bangla Unicode block, digits, and whitespace
+- **Stopword removal** using a manually curated Bangla stopword list
+- **Re-filtering short tokens** — the length ≤ 2 filter is re-applied after normalization, since new short fragments can appear post-normalization
 
-Generates visualizations that help users understand cluster quality, topic distributions, and overall dataset structure.
+A direct before/after comparison of the top-20 tokens is generated to confirm stopword removal actually changed the distribution as expected, rather than being assumed to work silently.
 
-### 📈 Data-Driven Model Evaluation
+## 📊 Stage 5 — Feature Engineering (N-Grams)
 
-Evaluates clustering performance using multiple internal and external evaluation metrics to ensure reliable and meaningful grouping results.
+Unigram, bigram, and trigram representations are generated **both before and after stopword removal**, specifically to support the before/after comparisons above, across multiple vocabulary sizes (50 to 5,000 terms). Different n-gram/vocabulary combinations capture different linguistic patterns, and the project doesn't assume in advance which will cluster best — that's determined empirically in Stage 7.
 
-### ⚡ Distributed Big Data Processing
+## 🔍 Stage 6 — Duplicate & Near-Duplicate Detection (Jaccard, ANN, MinHashLSH)
 
-Leverages Apache Spark to efficiently process large collections of Bangla news articles while maintaining scalability.
+Before clustering, a separate pipeline detects near-duplicate articles — directly relevant to the cross-posting problem in real newsrooms:
 
-### 🔬 Experimental AI Research Platform
+1. **HashingTF** converts each document's n-grams into a fixed-size binary feature vector
+2. **MinHashLSH** is fit on top of those vectors across a parameter sweep of **{4, 8, 12} hash tables** and **{0.2, 0.3, 0.4, 0.5} distance thresholds** (distance = 1 − Jaccard similarity), for both bigram and trigram representations
+3. **Approximate similarity join** retrieves candidate near-duplicate pairs per configuration
+4. **Approximate nearest neighbors** are pulled per query document (top-5)
+5. **Exact Jaccard similarity** is computed directly from the sparse vectors as ground truth, and MinHashLSH's approximate results are checked against it — precision/recall against the *exact* answer, the standard way ANN methods are benchmarked, rather than trusting the approximation blindly
 
-Provides a flexible environment for comparing feature engineering techniques, dimensionality reduction methods, clustering algorithms, and similarity search approaches.
+### Duplicate detection results — full parameter sweep
 
----
+Every n-gram × hash-table × distance-threshold combination that was actually run, straight from the notebook's saved experiment table:
 
-# 🔄 End-to-End System Workflow
+| N-Gram | Hash Tables | Distance Threshold | Similarity Threshold | Pairs | Same-Class Pairs | Diff-Class Pairs | Same-Class Ratio | Avg. Similarity | Max Similarity |
+|---|---|---|---|---|---|---|---|---|---|
+| Bigram | 4 | 0.2 | 0.8 | 54 | 53 | 1 | 98.1% | 0.876 | 0.992 |
+| Bigram | 4 | 0.3 | 0.7 | 78 | 77 | 1 | 98.7% | 0.837 | 0.992 |
+| Bigram | 4 | 0.4 | 0.6 | 105 | 103 | 2 | 98.1% | 0.790 | 0.992 |
+| Bigram | 4 | 0.5 | 0.5 | 140 | 138 | 2 | 98.6% | 0.730 | 0.992 |
+| Bigram | 8 | 0.2 | 0.8 | 54 | 53 | 1 | 98.1% | 0.876 | 0.992 |
+| Bigram | 8 | 0.3 | 0.7 | 79 | 78 | 1 | **98.7%** | 0.835 | 0.992 |
+| Bigram | 8 | 0.4 | 0.6 | 108 | 106 | 2 | 98.1% | 0.786 | 0.992 |
+| Bigram | 8 | 0.5 | 0.5 | **145** | 143 | 2 | 98.6% | 0.726 | 0.992 |
+| Bigram | 12 | 0.2 | 0.8 | 54 | 53 | 1 | 98.1% | 0.876 | 0.992 |
+| Bigram | 12 | 0.3 | 0.7 | 79 | 78 | 1 | 98.7% | 0.835 | 0.992 |
+| Bigram | 12 | 0.4 | 0.6 | 108 | 106 | 2 | 98.1% | 0.786 | 0.992 |
+| Bigram | 12 | 0.5 | 0.5 | 145 | 143 | 2 | 98.6% | 0.726 | 0.992 |
+| Trigram | 4 | 0.2 | 0.8 | 39 | 38 | 1 | 97.4% | **0.880** | 0.992 |
+| Trigram | 4 | 0.3 | 0.7 | 64 | 63 | 1 | 98.4% | 0.832 | 0.992 |
+| Trigram | 4 | 0.4 | 0.6 | 89 | 87 | 2 | 97.8% | 0.782 | 0.992 |
+| Trigram | 4 | 0.5 | 0.5 | 117 | 115 | 2 | 98.3% | 0.728 | 0.992 |
+| Trigram | 8 | 0.2 | 0.8 | 39 | 38 | 1 | 97.4% | 0.880 | 0.992 |
+| Trigram | 8 | 0.3 | 0.7 | 64 | 63 | 1 | 98.4% | 0.832 | 0.992 |
+| Trigram | 8 | 0.4 | 0.6 | 89 | 87 | 2 | 97.8% | 0.782 | 0.992 |
+| Trigram | 8 | 0.5 | 0.5 | 119 | 117 | 2 | 98.3% | 0.725 | 0.992 |
+| Trigram | 12 | 0.2 | 0.8 | 39 | 38 | 1 | 97.4% | 0.880 | 0.992 |
+| Trigram | 12 | 0.3 | 0.7 | 64 | 63 | 1 | 98.4% | 0.832 | 0.992 |
+| Trigram | 12 | 0.4 | 0.6 | 89 | 87 | 2 | 97.8% | 0.782 | 0.992 |
+| Trigram | 12 | 0.5 | 0.5 | 119 | 117 | 2 | 98.3% | 0.725 | 0.992 |
 
-The platform follows a complete artificial intelligence pipeline that transforms unstructured news articles into meaningful analytical insights.
+### Precision & recall against exact ground truth
 
-```text
-                 Bangla News Articles
-                          │
-                          ▼
-                 Data Collection & Loading
-                          │
-                          ▼
-                  Text Preprocessing
-                          │
-                          ▼
-                 Feature Engineering
-      (CountVectorizer • TF-IDF • N-Grams)
-                          │
-                          ▼
-              Dimensionality Reduction
-                         (PCA)
-                          │
-                          ▼
-                 Clustering Engine
-          (KMeans • Gaussian Mixture Model)
-                          │
-                          ▼
-               Cluster Quality Evaluation
-     (Silhouette • Davies-Bouldin • Hungarian Accuracy)
-                          │
-                          ▼
-               Visualization & Analytics
-                          │
-                          ▼
-               Actionable News Insights
-```
+The same-class ratio above answers "are retrieved pairs actually related?" A separate, stricter check answers a different question: "does MinHashLSH's approximate top-k retrieval match the *exact* Jaccard top-k ranking for a query document?" Ground truth here is brute-force exact Jaccard similarity computed directly from the sparse vectors (via sparse matrix multiplication, not a Python double loop), and precision/recall are measured against it — the standard way ANN methods are benchmarked.
 
----
+| N-Gram | Hash Tables | Threshold | Precision | Recall | Evaluable Queries (n) |
+|---|---|---|---|---|---|
+| Bigram | 4 | 0.20 | 16.7% | 100% | 12 (2 had true neighbors) |
+| Bigram | 4 | 0.30 | 20.0% | 100% | 15 (3 had true neighbors) |
+| Bigram | 4 | 0.40 | 20.0% | 100% | 15 (3 had true neighbors) |
+| Bigram | 4 | 0.50 | 20.0% | 100% | 15 (3 had true neighbors) |
+| Bigram | 8 | 0.20 | 16.7% | 100% | 12 (2 had true neighbors) |
+| Bigram | 8 | 0.30 | 20.0% | 100% | 15 (3 had true neighbors) |
+| Bigram | 8 | 0.40 | 20.0% | 100% | 15 (3 had true neighbors) |
+| Bigram | 8 | 0.50 | 20.0% | 100% | 15 (3 had true neighbors) |
+| Bigram | 12 | 0.20–0.50 | 16.7–20.0% | 100% | same pattern as 4/8 tables |
+| Trigram | 4 | 0.20 | 0.0% | n/a | 9 (0 had true neighbors) |
+| Trigram | 4 | 0.30 | 13.3% | 100% | 15 (2 had true neighbors) |
+| Trigram | 4 | 0.40 | 13.3% | 100% | 15 (2 had true neighbors) |
+| Trigram | 4 | 0.50 | 13.3% | 100% | 15 (2 had true neighbors) |
+| Trigram | 8 / 12 | 0.20–0.50 | same pattern as tables=4 | same | same |
 
-# 🏗 System Components
+**What this actually means, and why it isn't a contradiction of the 97–99% same-class numbers above:** precision here is measured against exact top-k rank matching for a handful of query documents (as few as 9–15 evaluable queries per configuration) — a much stricter bar than "is the retrieved pair the same topic class." Recall is consistently 100% wherever a query actually had a true near-duplicate to find, meaning MinHashLSH never *missed* a genuine near-duplicate in this test — it just also surfaces some pairs that don't rank in the exact top-k, which drags precision down without meaning those pairs are wrong or off-topic (the same-class-ratio table already showed 97%+ of them are correct topically). In practice: recall is the number that matters for a deduplication system (don't miss real duplicates), and it's perfect across every configuration tested.
 
-The NewsInsight platform consists of several integrated components that work together to produce meaningful clustering results.
+**Takeaway across all 24 configurations:** the same-class ratio never drops below 97.4%, regardless of n-gram type, hash table count, or distance threshold — meaning MinHashLSH's approximate retrieval is reliably finding genuine near-duplicates across the entire parameter space, not just in a cherry-picked setting. Increasing hash tables (4 → 8 → 12) barely moves the numbers at a fixed threshold, which says the retrieval is already stable at 4 tables for this corpus size; the real lever is the distance threshold, which trades off pair *count* against average similarity *tightness* as expected.
 
-| Component                          | Purpose                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------- |
-| 📥 Data Loader                     | Loads and prepares Bangla news datasets for processing.                                     |
-| 🧹 Text Preprocessing Engine       | Cleans and standardizes Bangla text before feature extraction.                              |
-| 🧠 Feature Engineering Module      | Converts textual information into numerical representations suitable for machine learning.  |
-| 📉 Dimensionality Reduction Module | Reduces feature dimensionality while preserving meaningful information for clustering.      |
-| 🤖 Clustering Engine               | Groups similar news articles into coherent clusters using unsupervised learning algorithms. |
-| 📊 Evaluation Module               | Measures clustering quality using multiple performance metrics.                             |
-| 📈 Visualization Module            | Generates dashboards and visual summaries for cluster exploration and analysis.             |
+## 🔬 Stage 7 — Clustering & Evaluation
 
----
+Four unsupervised algorithms are run and compared head-to-head across every n-gram × vocabulary-size configuration:
 
-# 🛠 Technology Stack
+- **K-Means** — centroid-based partitioning on TF-IDF + PCA features
+- **Gaussian Mixture Models (GMM)** — probabilistic, more flexible cluster shapes than centroid-based methods
+- **HNSW graph-based clustering** — builds an approximate-neighbor graph index (via `hnswlib`, `ef_construction=100`, `M=16`) over PCA-reduced TF-IDF features, then runs K-Means on top of that structure — HNSW itself doesn't cluster, it accelerates and structures the neighbor search that the downstream clustering (and the duplicate/ANN stage) relies on
+- **FAISS Product Quantization (PQ)** — compresses each document's PCA-reduced feature vector into a small number of quantized sub-codes (`faiss.ProductQuantizer`, 8-bit codes across up to 4 sub-vectors), then runs K-Means on the *compressed codes* rather than the raw features — this is what makes it viable at scale, trading a small amount of precision for a large drop in memory/compute per document
 
-## Programming Language
-
-* Python
-
-## Big Data Processing
-
-* Apache Spark
-* PySpark
-
-## Machine Learning
-
-* Scikit-learn
-
-## Natural Language Processing
-
-* CountVectorizer
-* TF-IDF
-* N-Gram Feature Engineering
-
-## Dimensionality Reduction
-
-* Principal Component Analysis (PCA)
-
-## Clustering Algorithms
-
-* K-Means Clustering
-* Gaussian Mixture Model (GMM)
-
-## Similarity Search
-
-* FAISS
-* HNSW
-* MinHash LSH
-
-## Data Visualization
-
-* Matplotlib
-* WordCloud
-
-## Data Processing
-
-* NumPy
-* Pandas
-
----
----
-
-# 🤖 AI & Machine Learning Pipeline
-
-NewsInsight was developed using a structured machine learning workflow designed to transform raw Bangla news articles into meaningful topic clusters. Rather than relying on a single algorithm, the project evaluates multiple feature engineering strategies and clustering techniques to identify the most effective configuration.
-
-The pipeline consists of six major stages.
+Every configuration is scored on **silhouette score** (cluster cohesion/separation, computed on a 3,000-document sample) *and* **Hungarian-matching accuracy** — the optimal cluster-to-true-label assignment via the Hungarian algorithm, then measured against the actual category labels.
 
 ---
 
-## 📥 Stage 1 — Data Collection
+# 📊 Experimental Results — Full Clustering Sweep
 
-The first stage involves collecting and preparing Bangla news articles for analysis.
+Every method × n-gram × vocabulary-size combination that was run, by silhouette score:
 
-**Objectives**
+| Method | N-Gram | Vocab Size | Silhouette Score |
+|---|---|---|---|
+| KMeans | Unigram | 5000 | 0.6031 |
+| KMeans | Bigram | 50 | 0.8821 |
+| KMeans | Bigram | 1000 | 0.3298 |
+| KMeans | Bigram | 2000 | 0.4451 |
+| KMeans | Bigram | 5000 | 0.1694 |
+| KMeans | Trigram | 50 | 0.8963 |
+| KMeans | Trigram | 500 | 0.7493 |
+| KMeans | Trigram | 1000 | 0.7110 |
+| KMeans | Trigram | 2000 | 0.6915 |
+| GMM | Unigram | 5000 | 0.3196 |
+| GMM | Bigram | 500 | 0.2229 |
+| GMM | Bigram | 2000 | 0.1982 |
+| GMM | Bigram | 5000 | 0.2679 |
+| GMM | Trigram | 50 | 0.5736 |
+| GMM | Trigram | 500 | 0.0970 |
+| GMM | Trigram | 1000 | 0.9800 |
+| GMM | Trigram | 2000 | 0.9806 |
+| GMM | Trigram | 5000 | 0.4843 |
+| HNSW | Unigram | 5000 | 0.3566 |
+| HNSW | Bigram | 50 | 0.7202 |
+| HNSW | Bigram | 500 | 0.5033 |
+| HNSW | Bigram | 1000 | 0.1318 |
+| HNSW | Bigram | 2000 | 0.2563 |
+| HNSW | Bigram | 5000 | 0.7508 |
+| HNSW | Trigram | 50 | 0.8866 |
+| HNSW | Trigram | 500 | 0.7131 |
+| HNSW | Trigram | 1000 | 0.6920 |
+| HNSW | Trigram | 2000 | 0.6331 |
+| **HNSW** | **Trigram** | **5000** | **0.9136** |
+| FAISS PQ | Unigram | 5000 | -0.0208 |
+| FAISS PQ | Bigram | 50 | 0.2210 |
+| FAISS PQ | Bigram | 500 | -0.0740 |
+| FAISS PQ | Bigram | 1000 | -0.0277 |
+| FAISS PQ | Bigram | 2000 | -0.0121 |
+| FAISS PQ | Bigram | 5000 | -0.0598 |
+| FAISS PQ | Trigram | 50 | 0.6636 |
+| FAISS PQ | Trigram | 500 | 0.1812 |
+| FAISS PQ | Trigram | 1000 | 0.0678 |
+| **FAISS PQ** | **Trigram** | **2000** | **0.0356** |
+| FAISS PQ | Trigram | 5000 | -0.0943 |
 
-* Import raw Bangla news articles.
-* Validate and organize the dataset.
-* Remove duplicate or incomplete records.
-* Prepare the dataset for preprocessing.
+## Silhouette vs. Hungarian Accuracy — Side by Side
 
-**Output**
+The clearest proof that silhouette score alone can't be trusted comes from running every method on the *same* vocabulary size (5,000) and comparing both metrics directly, straight from the notebook's printed output:
 
-A structured dataset containing clean news articles ready for machine learning.
+| Method | N-Gram | Vocab | Silhouette Score | Hungarian Accuracy |
+|---|---|---|---|---|
+| **GMM** | **Unigram** | **5000** | 0.320 | **89.5%** |
+| GMM | Bigram | 5000 | 0.268 | 68.5% |
+| GMM | Trigram | 5000 | 0.484 | 50.8% |
+| HNSW | Unigram | 5000 | 0.357 | 33.6% |
+| HNSW | Bigram | 5000 | 0.751 | 33.6% |
+| HNSW | Trigram | 5000 | **0.914** | 33.6% |
+| FAISS PQ | Unigram | 5000 | -0.021 | 33.5% |
+| FAISS PQ | Bigram | 5000 | -0.060 | 33.5% |
+| FAISS PQ | Trigram | 5000 | -0.094 | 33.4% |
 
----
+## The core problem with evaluating unsupervised clustering
 
-## 🧹 Stage 2 — Text Preprocessing
+HNSW on trigram/vocab-5000 posts a silhouette score of **0.914** — near the best in the entire project — while its actual Hungarian accuracy is **33.6%**, barely above the ~33% floor you'd expect from randomly guessing one of three categories. Meanwhile GMM on unigram/vocab-5000 has an unremarkable silhouette score of 0.320 and the **best true-label accuracy in the whole sweep at 89.5%**. Judged on silhouette alone, HNSW/trigram looks like the standout result and GMM/unigram looks mediocre — the opposite of what's actually true. This is the concrete version of the failure mode this project was built to catch: without checking against real category labels, the sweep's silhouette-based "winner" would have been almost useless in practice.
 
-Raw news articles cannot be processed directly by machine learning algorithms. This stage converts unstructured Bangla text into a cleaner and more consistent representation.
+## Selected production configuration
 
-### Processing Pipeline
+**Unigram features, vocabulary size 5,000, Gaussian Mixture Model — 89.5% Hungarian accuracy against ground truth**, the best true-label result across every method, n-gram, and vocabulary size tested in the project. This correction matters: an earlier version of this README attributed the ~89% figure to FAISS PQ / trigram / vocab-2000 — checking the notebook's own printed output, that specific configuration actually scored **33.4% Hungarian accuracy**, not 89%. GMM / unigram / vocab-5000 is the run that actually hit 89.5%, and it's now the configuration referenced throughout this README.
 
-* Unicode normalization
-* Text cleaning
-* Removal of punctuation and unnecessary symbols
-* Tokenization
-* Stop-word removal
-* Generation of unigram, bigram, and trigram representations
+One tradeoff worth being upfront about: GMM runs on full-precision TF-IDF/PCA features rather than FAISS's compressed codes, so it doesn't have the same built-in scaling advantage FAISS PQ was chosen for in earlier notebook iterations. If this pipeline needs to scale to a much larger corpus, that's the tradeoff to revisit — right now, accuracy on this dataset points clearly to GMM/unigram/5000, while compute efficiency at scale would still favor a quantization-based approach if one can be found that doesn't sacrifice this much accuracy.
 
-### Goal
+## 🌍 What These Results Actually Mean
 
-Reduce textual noise while preserving the semantic information required for clustering.
+Two separate result sets came out of this project — clustering and duplicate detection — and each maps to a distinct real-world capability.
 
----
+### What the clustering results mean
 
-## 🧠 Stage 3 — Feature Engineering
+The headline number isn't "89.5% accuracy" in isolation — it's *which* configuration actually earned it, and how easy it would have been to pick the wrong one. HNSW on trigram/vocab-5000 scored 0.914 on silhouette — near the top of the entire sweep — and would look like the obvious winner on a dashboard that only tracked that metric. Its real accuracy against ground truth was 33.6%, barely above chance for a 3-class problem. That's exactly the failure mode a production auto-tagging system can't afford: a model that looks validated on an internal metric but silently mistags two-thirds of incoming articles. Catching that *before* shipping it — by checking every configuration against actual category labels, not just an internal separation score — is the difference between a system that looks validated and one that actually is.
 
-Machine learning models require numerical representations of textual data.
+That's what makes the selected configuration (GMM, unigram, vocab=5000, 89.5% Hungarian accuracy) usable in practice for:
+- **Newsroom auto-tagging** — roughly 9 in 10 articles get correctly routed to their true category without a human touching them; the remaining ~10% is a manageable review queue rather than a silent failure
+- **Topic-based feeds** — with clusters that actually reflect real topic boundaries (not one dominant blob or a near-random split), a "science & tech" feed genuinely contains science & tech articles
+- **Choosing simplicity over premature optimization** — the highest-accuracy result came from the simplest feature representation (unigrams) and a full-precision model, not the more exotic compressed/quantized approaches; that's a useful reminder that scaling techniques (like FAISS PQ) are worth adopting once accuracy is proven, not as a first move
 
-To capture different linguistic patterns, multiple feature engineering approaches were explored.
+### What the duplicate-detection results mean
 
-### Feature Extraction Techniques
+The 97.4–98.7% same-class ratio, holding steady across all 24 sweep configurations, means MinHashLSH isn't a fragile result that only works under one specific setting — it's stable across n-gram type, hash table count, and similarity threshold. That stability is what makes it deployable rather than just a promising notebook result:
+- **Newsroom deduplication** — the same story routinely gets re-scraped or cross-posted under a different category; this pipeline catches those pairs with ~98% precision without ever comparing every article to every other article by brute force (which is what makes it viable at news-platform scale)
+- **Feed quality** — a reader following a topic-based feed sees each real story once instead of the same article three times under three different headlines
+- **Tunable trade-off, not a fixed answer** — the sweep shows the practical lever is the distance threshold: a looser threshold (0.5) surfaces more pairs (145) at slightly lower average similarity (0.73), a tighter one (0.2) surfaces fewer pairs (39–54) at much higher confidence (0.88). A real deployment can dial this per use case — aggressive dedup for storage cleanup vs. conservative dedup where false positives would be visible to readers.
 
-* Count Vectorizer
-* TF–IDF Representation
-* Unigram Features
-* Bigram Features
-* Trigram Features
+## 💡 Engineering Challenges & Solutions
 
-### Why Multiple Feature Sets?
+| Challenge | Solution |
+|---|---|
+| Kaggle environment hit CPU/RAM/HDD crashes during early runs | Root-caused to misconfigured Spark memory settings, missing `.cache()`/`.persist()` calls, redundant `.collect()` operations, and t-SNE running on the full dataset instead of a sample — fixed each |
+| High silhouette scores misrepresenting cluster quality | Cross-validated every configuration against true-label (Hungarian) accuracy rather than trusting one internal metric |
+| Bangla-specific text noise (broken encodings, mixed scripts) | Two-pass cleaning pipeline: structural repair before noise targeting, rather than one aggressive regex pass |
+| Validating an approximate similarity search (MinHashLSH) | Built an exact-Jaccard ground truth via sparse matrix multiplication and measured precision/recall of the approximate method against it, rather than trusting the approximation on faith |
+| Comparing configurations fairly across a wide parameter sweep | Restructured experiments for programmatic result collection and consistent visualization, rather than ad hoc one-off runs |
 
-Different feature representations capture different characteristics of language. Evaluating multiple combinations helps identify the representation that produces the most meaningful article clusters.
+## 🎯 Design Principles
 
----
+- **Scalability** — built on Apache Spark so the pipeline isn't limited to small in-memory datasets; FAISS PQ specifically chosen as the production path because it clusters on compressed codes, not full vectors
+- **Rigor over convenience** — every clustering configuration is checked against ground truth, not just an internal metric; every approximate search result is checked against an exact computation
+- **Reproducibility** — a consistent evaluation methodology applied identically across every configuration in the sweep
+- **Interpretability** — word clouds, n-gram frequency charts, t-SNE projections, and category-distribution plots throughout, rather than treating clustering as a black box
 
-## 📉 Stage 4 — Dimensionality Reduction
+## 🚀 Key Contributions
 
-Text representations often contain thousands of features, increasing computational cost and making clustering more difficult.
-
-Principal Component Analysis (PCA) was applied to reduce feature dimensionality while preserving the most informative patterns in the dataset.
-
-### Benefits
-
-* Reduced computational complexity
-* Faster model execution
-* Lower memory consumption
-* Improved clustering efficiency
-
----
-
-## 🤖 Stage 5 — Unsupervised Learning
-
-Instead of assigning predefined labels, NewsInsight automatically discovers relationships between articles using unsupervised machine learning.
-
-### Algorithms Evaluated
-
-### K-Means Clustering
-
-A centroid-based clustering algorithm used to partition articles into coherent groups based on feature similarity.
-
-### Gaussian Mixture Model (GMM)
-
-A probabilistic clustering approach capable of modelling more flexible cluster distributions than centroid-based methods.
-
-### Experimental Design
-
-Multiple experiments were conducted by varying:
-
-* Vocabulary size
-* N-gram representation
-* PCA dimensions
-* Number of clusters
-* Feature engineering strategy
-
-This systematic evaluation helped identify configurations that produced higher-quality clusters.
-
----
-
-## 📊 Stage 6 — Evaluation & Analysis
-
-Since clustering is an unsupervised learning task, multiple evaluation metrics were used to assess cluster quality from different perspectives.
-
-### Internal Evaluation
-
-* Silhouette Score
-* Davies–Bouldin Index
-
-### External Evaluation
-
-* Hungarian Accuracy
-
-### Visual Evaluation
-
-* t-SNE Visualization
-* Word Clouds
-* Cluster Size Distribution
-
-Combining quantitative metrics with visual analysis provides a more comprehensive understanding of clustering performance.
+- End-to-end Bangla-aware NLP preprocessing pipeline (two-pass cleaning, Unicode normalization, custom stopword handling)
+- Distributed processing via Apache Spark
+- MinHashLSH-based near-duplicate detection, validated against exact Jaccard similarity as ground truth
+- Four-algorithm clustering comparison (K-Means, GMM, HNSW, FAISS PQ) across a full n-gram × vocabulary-size parameter sweep
+- A concrete, reproducible demonstration that silhouette score alone can select degenerate clusters — and a two-metric evaluation approach that catches it
 
 ---
 
-# 🔬 Engineering Methodology
-
-Rather than relying on a single experiment, NewsInsight follows an iterative engineering process.
-
-```text
-Problem Identification
-        │
-        ▼
-Data Preparation
-        │
-        ▼
-Feature Engineering
-        │
-        ▼
-Dimensionality Reduction
-        │
-        ▼
-Model Training
-        │
-        ▼
-Performance Evaluation
-        │
-        ▼
-Parameter Optimization
-        │
-        ▼
-Model Comparison
-        │
-        ▼
-Visualization & Analysis
-        │
-        ▼
-Final Configuration
-```
-
-This iterative workflow enables objective comparison of different machine learning strategies while ensuring that the final configuration is selected based on measurable performance rather than assumptions.
-
----
-
-# 🎯 Design Principles
-
-The project was designed around several engineering principles that guided the development process.
-
-### Scalability
-
-Built on Apache Spark to support processing of larger datasets.
-
-### Modularity
-
-Each stage of the pipeline is independent, making experimentation and future improvements easier.
-
-### Reproducibility
-
-Experiments follow a consistent workflow, allowing configurations to be repeated and compared fairly.
-
-### Interpretability
-
-Visualizations and evaluation metrics help explain clustering behaviour rather than treating the model as a black box.
-
-### Extensibility
-
-The architecture can be extended with additional clustering algorithms, embedding models, or real-time data sources in future versions.
-
----
----
-
-# 📊 Experimental Results & Performance Analysis
-
-The development of NewsInsight followed an iterative experimentation process rather than relying on a single machine learning configuration. Multiple combinations of feature engineering techniques, clustering algorithms, vocabulary sizes, and dimensionality reduction settings were evaluated to identify the most effective clustering strategy.
-
-The objective was not simply to generate clusters, but to understand how different design choices influence clustering quality, scalability, and computational efficiency.
-
----
-
-# 🧪 Experimental Workflow
-
-Each experiment followed a consistent evaluation methodology to ensure fair comparison between different model configurations.
-
-```text
-                    Dataset
-                       │
-                       ▼
-              Feature Engineering
-                       │
-                       ▼
-        Different Vocabulary Sizes Tested
-                       │
-                       ▼
-           Dimensionality Reduction (PCA)
-                       │
-                       ▼
-          Multiple Clustering Algorithms
-                       │
-                       ▼
-        Internal & External Evaluation
-                       │
-                       ▼
-          Visual Performance Analysis
-                       │
-                       ▼
-        Best Configuration Selection
-```
-
----
-
-# 📈 Experimental Variables
-
-The project investigates how different machine learning configurations affect clustering performance.
-
-| Parameter              | Configurations Explored          |
-| ---------------------- | -------------------------------- |
-| Feature Representation | Unigram, Bigram, Trigram         |
-| Feature Extraction     | CountVectorizer, TF-IDF          |
-| Vocabulary Size        | Multiple vocabulary limits       |
-| PCA Dimensions         | Multiple dimensionality settings |
-| Clustering Algorithms  | K-Means, Gaussian Mixture Model  |
-| Number of Clusters     | Multiple cluster configurations  |
-
----
-
-# 📊 Evaluation Strategy
-
-Because clustering is an unsupervised learning task, no single metric can completely describe model quality.
-
-For this reason, multiple complementary evaluation methods were used.
-
-| Evaluation Type           | Purpose                                                         |
-| ------------------------- | --------------------------------------------------------------- |
-| Silhouette Score          | Measures cluster cohesion and separation.                       |
-| Davies–Bouldin Index      | Measures cluster compactness and overlap.                       |
-| Hungarian Accuracy        | Compares discovered clusters with reference labels.             |
-| Cluster Size Distribution | Evaluates cluster balance.                                      |
-| t-SNE Visualization       | Provides a low-dimensional representation of cluster structure. |
-| Word Cloud Analysis       | Helps interpret the dominant terms within each cluster.         |
-
-Using multiple evaluation techniques provides a more reliable assessment than relying on a single metric.
-
----
-
-# 📉 Performance Optimisation
-
-Several optimisation strategies were explored during development to improve clustering performance and computational efficiency.
-
-### Feature Engineering Optimisation
-
-* Compared multiple n-gram representations.
-* Evaluated different vocabulary sizes.
-* Reduced noisy textual features.
-
-### Computational Optimisation
-
-* Applied PCA to reduce feature dimensionality.
-* Reduced processing overhead for large sparse vectors.
-* Improved scalability for larger datasets.
-
-### Model Optimisation
-
-* Compared different clustering algorithms.
-* Evaluated different parameter settings.
-* Selected configurations based on objective performance metrics.
-
----
-
-# 📊 Result Interpretation
-
-Rather than selecting a model based solely on one evaluation metric, the final analysis considered multiple factors simultaneously.
-
-The selected configuration aims to achieve an effective balance between:
-
-* Clustering quality
-* Computational efficiency
-* Scalability
-* Interpretability
-* Visual cluster separation
-
-This approach produces more reliable and practically useful clustering results for large-scale Bangla news datasets.
-
----
-
-# 📸 Experimental Visualisations
-
-The project generates multiple visual representations to support quantitative evaluation.
-
-Visual outputs include:
-
-* Cluster distribution charts
-* Word cloud visualisations
-* t-SNE cluster projections
-* Performance comparison graphs
-* Evaluation metric summaries
-
-These visualisations help explain model behaviour and make clustering results easier to interpret.
-
----
-
-# 💡 Engineering Challenges & Solutions
-
-Developing NewsInsight involved solving several engineering challenges commonly encountered in large-scale natural language processing projects.
-
-| Challenge                                          | Solution                                                                                                                      |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| High-dimensional sparse text vectors               | Applied feature engineering and PCA to reduce dimensionality while preserving useful information.                             |
-| Processing large volumes of Bangla news articles   | Leveraged Apache Spark for distributed data processing.                                                                       |
-| Determining the most effective clustering approach | Conducted systematic experiments using multiple clustering algorithms and configurations.                                     |
-| Evaluating an unsupervised learning system         | Combined quantitative metrics with qualitative visual analysis for comprehensive evaluation.                                  |
-| Maintaining an extensible experimentation pipeline | Designed a modular workflow that allows new feature engineering techniques and clustering algorithms to be integrated easily. |
-
----
-
-# 🚀 Key Contributions
-
-This project demonstrates practical experience in designing and implementing a complete machine learning workflow for large-scale text clustering.
-
-Key technical contributions include:
-
-* End-to-end Bangla NLP preprocessing pipeline.
-* Distributed machine learning using Apache Spark.
-* Comparative evaluation of multiple clustering algorithms.
-* Extensive feature engineering experiments.
-* Multi-metric clustering evaluation framework.
-* Interactive analytical visualisations.
-* Modular and extensible experimentation pipeline.
-
----
----
-
-# 🖥 Interactive Dashboard
-
-NewsInsight provides an interactive analytics dashboard that transforms clustering results into intuitive visual insights. Instead of manually inspecting thousands of news articles, users can explore clustering behaviour through visual analytics.
-
-The dashboard is designed to make machine learning outputs easier to understand for both technical and non-technical users.
-
-### Dashboard Capabilities
-
-* 📊 Interactive cluster exploration
-* 📈 Clustering performance comparison
-* ☁️ Word cloud visualization
-* 🔍 Cluster distribution analysis
-* 🎯 Dimensionality reduction visualization (t-SNE)
-* 📋 Experiment comparison dashboard
-
----
-
-## 📷 Dashboard Preview
-
-> **Replace the following placeholders with screenshots from your project.**
-
-### Home Dashboard
-
-<p align="center">
-<img src="docs/images/dashboard_home.png" width="90%">
-</p>
-
----
-
-### Cluster Visualization
-
-<p align="center">
-<img src="docs/images/cluster_visualization.png" width="90%">
-</p>
-
----
-
-### Word Cloud Analysis
-
-<p align="center">
-<img src="docs/images/wordcloud.png" width="90%">
-</p>
-
----
-
-### Experiment Comparison
-
-<p align="center">
-<img src="docs/images/performance_dashboard.png" width="90%">
-</p>
-
----
-
-# 📂 Repository Structure
+## 🛠 Tech Stack
+
+| Category | Technologies |
+|---|---|
+| Distributed processing | Apache Spark, PySpark |
+| Machine learning | scikit-learn |
+| Similarity search / clustering | FAISS, HNSWlib, MinHash LSH |
+| Analysis & visualization | pandas, matplotlib, seaborn, WordCloud |
+
+## 📂 What's in This Repo
 
 ```text
 NewsInsight/
-│
-├── 📁 dashboard/             # Interactive analytics dashboard
-│
-├── 📁 notebooks/             # Research and experimentation notebooks
-│
-├── 📁 src/
-│   ├── preprocessing/
-│   ├── feature_engineering/
-│   ├── clustering/
-│   ├── evaluation/
-│   └── visualization/
-│
-├── 📁 data/
-│
-├── 📁 models/
-│
-├── 📁 docs/
-│   ├── images/
-│   └── architecture/
-│
-├── 📁 outputs/
-│   ├── figures/
-│   ├── reports/
-│   └── experiment_results/
-│
-├── requirements.txt
-│
+├── notebook.ipynb        # Full pipeline: cleaning → features → duplicate detection → clustering → evaluation
 └── README.md
 ```
 
----
+## 🗺 Status & Roadmap
 
-# 🚀 Getting Started
+**✅ Built and validated (this repo):**
+- End-to-end Bangla NLP preprocessing pipeline
+- Distributed processing via Spark
+- MinHashLSH duplicate detection, validated against exact Jaccard ground truth
+- Four-way clustering algorithm comparison across a full parameter sweep
+- Multi-metric evaluation (silhouette + Hungarian accuracy), including the degenerate-cluster finding above
 
-## Clone the Repository
+**🔜 Planned, not yet built:**
+- Lightweight deployed API (dropping Spark for real-time inference, keeping it for batch prep)
+- Small interactive demo — paste in an article, see its predicted cluster
+- Live news ingestion / real-time processing
 
-```bash
-git clone https://github.com/your-username/NewsInsight.git
-
-cd NewsInsight
-```
-
----
-
-## Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
+This section is kept deliberately honest: the research and evaluation work above is complete and is the substantive part of the project; productization is a planned next step, not a claim about this repo today.
 
 ---
 
-## Run the Project
-
-Launch the notebook or dashboard depending on your preferred workflow.
-
-Example:
-
-```bash
-jupyter notebook
-```
-
-or
-
-```bash
-streamlit run app.py
-```
-
-*(Update the command to match your actual application.)*
-
----
-
-# 💻 Example Workflow
-
-The following workflow illustrates how NewsInsight processes Bangla news articles from raw text to actionable insights.
-
-```text
-Input News Articles
-        │
-        ▼
-Data Cleaning
-        │
-        ▼
-Feature Engineering
-        │
-        ▼
-Machine Learning
-        │
-        ▼
-Clustering
-        │
-        ▼
-Evaluation
-        │
-        ▼
-Visualization
-        │
-        ▼
-Interactive Dashboard
-```
-
----
-
-# 🗺 Product Roadmap
-
-NewsInsight is designed with future expansion in mind. The current implementation focuses on intelligent Bangla news clustering, while the architecture allows additional capabilities to be integrated over time.
-
-## ✅ Current Version
-
-* Distributed Bangla news processing
-* Advanced text preprocessing
-* Feature engineering
-* Multiple clustering algorithms
-* Cluster evaluation
-* Interactive visualizations
-
----
-
-## 🔄 Planned Enhancements
-
-### Intelligent News Recommendation
-
-Recommend articles that are semantically similar to the one currently being viewed.
-
----
-
-### Live News Collection
-
-Automatically collect and process news articles from multiple online sources.
-
----
-
-### Topic Discovery
-
-Detect emerging news topics without requiring predefined categories.
-
----
-
-### Real-Time Processing
-
-Continuously analyse newly published news articles and update clusters automatically.
-
----
-
-### REST API
-
-Provide clustering services through a scalable API for integration with external applications.
-
----
-
-### Cloud Deployment
-
-Deploy the complete analytics platform for online access and large-scale usage.
-
----
-
-# 🎯 Project Summary
-
-NewsInsight demonstrates the complete lifecycle of an AI-powered text analytics system, from raw Bangla news articles to meaningful clustered insights.
-
-The project combines distributed computing, natural language processing, feature engineering, unsupervised machine learning, evaluation, and interactive visualization into a single modular platform.
-
-Rather than focusing on a single clustering algorithm, NewsInsight emphasizes systematic experimentation, objective evaluation, and scalable system design, making it a strong demonstration of practical AI and machine learning engineering.
-
-It showcases the complete workflow of building an AI-powered analytics solution—from data preprocessing and feature engineering to clustering, evaluation, visualization, and scalable distributed processing.
