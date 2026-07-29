@@ -39,6 +39,57 @@ Beyond these three, the same clustering core is adaptable to media monitoring, d
 
 ---
 
+---
+# ✨ Key Features
+
+NewsInsight is designed as an intelligent analytics platform that transforms raw Bangla news articles into organized, searchable, and meaningful information through scalable machine learning.
+
+- 📰 **Intelligent News Clustering**
+  - Automatically groups semantically similar Bangla news articles into meaningful clusters.
+  - Enables faster exploration and organization of related news stories.
+
+- ⚙️ **Advanced Text Processing**
+  - Cleans and preprocesses raw Bangla text using a comprehensive NLP pipeline.
+  - Improves data quality and consistency for machine learning tasks.
+
+- 🧠 **Multiple Clustering Strategies**
+  - Supports multiple clustering algorithms and feature representations.
+  - Enables systematic comparison to identify the most effective clustering configuration.
+
+- 📊 **Interactive Visual Analytics**
+  - Provides visualizations to explore cluster structures and topic distributions.
+  - Helps users interpret clustering results through intuitive graphical insights.
+
+- 📈 **Data-Driven Model Evaluation**
+  - Measures clustering performance using multiple internal and external evaluation metrics.
+  - Supports objective comparison between different experimental configurations.
+
+- ⚡ **Distributed Big Data Processing**
+  - Utilizes Apache Spark and PySpark for scalable data processing.
+  - Efficiently handles large collections of Bangla news articles.
+
+- 🔬 **Experimental AI Research Platform**
+  - Provides a modular environment for AI and NLP experimentation.
+  - Supports evaluation of feature engineering, dimensionality reduction, clustering algorithms, and similarity search techniques.
+
+---
+
+# 🛠 Technology Stack
+
+| Category | Technologies | Purpose |
+|----------|--------------|---------|
+| **Programming Language** | Python | Core programming language used to develop the entire machine learning pipeline. |
+| **Big Data Processing** | Apache Spark, PySpark | Distributed processing of large-scale Bangla news datasets and scalable data analysis. |
+| **Machine Learning** | Scikit-learn | Feature extraction, dimensionality reduction, clustering, and model evaluation. |
+| **Natural Language Processing** | CountVectorizer, TF-IDF, N-Gram Feature Engineering | Convert Bangla text into numerical feature representations for machine learning. |
+| **Dimensionality Reduction** | Principal Component Analysis (PCA) | Reduce high-dimensional feature vectors while preserving important information. |
+| **Clustering Algorithms** | K-Means, Gaussian Mixture Model (GMM) | Automatically group semantically similar Bangla news articles into meaningful clusters. |
+| **Similarity Search** | FAISS, HNSW, MinHash LSH | Fast similarity search and approximate nearest neighbour retrieval for text analysis. |
+| **Data Visualization** | Matplotlib, WordCloud | Visualize clustering results, topic distributions, and analytical insights. |
+| **Data Processing** | NumPy, Pandas | Data manipulation, preprocessing, numerical computation, and experiment management. |
+
+---
+
 # 🤖 Pipeline Stages
 
 The project follows a structured workflow, validated at each stage before moving to the next: **raw text → cleaning → tokenization/EDA → deep preprocessing (normalization + stopwords) → n-gram feature engineering → duplicate detection → clustering → evaluation.**
