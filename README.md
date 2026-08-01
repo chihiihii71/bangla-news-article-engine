@@ -1,6 +1,6 @@
 # TextArtifact — Scalable Big Data NLP Engine
 
-**A production-grade distributed pipeline that automatically organises 24,000 Bangla news articles into topic clusters — replacing hours of manual editorial work with a fully automated, scalable system.**
+**A production-grade distributed pipeline that automatically organises Bangla news articles into topic clusters — replacing hours of manual editorial work with a fully automated, scalable system.**
 
 ---
 
@@ -176,7 +176,7 @@ HNSW (Hierarchical Navigable Small World) and FAISS Product Quantization are ANN
 1. **Spark MLlib pipeline** — CountVectorizer → TF-IDF → PCA ran fully distributed inside Spark.
 2. **Spark → NumPy bridge** — PCA vectors collected from Spark into NumPy float32 arrays.
 3. **Index construction + sklearn KMeans:**
-   - *HNSW:* Built L2-space HNSW index (`M=16`, `ef_construction=100`, `ef=50`) via HNSWlib; ran sklearn KMeans on raw PCA vectors using the graph neighbourhood as the vector space justification.
+   - *HNSW:* Built an L2-space HNSW index (`M=16`, `ef_construction=100`, `ef=50`) via HNSWlib; ran sklearn KMeans on raw PCA vectors using the graph neighbourhood as the vector space justification.
    - *FAISS PQ:* Trained a Product Quantizer (M subspaces dividing the PCA dimension evenly, 8-bit codes); ran sklearn KMeans on the integer code matrix — clustering in compressed space with significant memory savings.
 4. **Labels rejoined to Spark** — cluster assignments joined back via `doc_id` key, enabling full Hungarian accuracy and Silhouette evaluation inside the Spark ecosystem.
 
@@ -226,10 +226,10 @@ This hybrid Spark ↔ sklearn ↔ FAISS/HNSWlib architecture is the core technic
 
 | Rank | Method | N-gram | Vocab | Silhouette | Hungarian Accuracy |
 |---|---|---|---|---|---|
-| 🥇 1st | **GMM** | trigram | 2000 | **0.9806** | Strongest label alignment |
-| 🥈 2nd | **HNSW** | trigram | 5000 | 0.9136 | Strong — graph geometry captures manifold structure |
-| 🥉 3rd | **KMeans** | trigram | 50 | 0.8963 | Strong — small vocab forces tight cluster boundaries |
-| 4th | **FAISS PQ** | trigram | 50 | 0.6636 | Moderate — quantization loss at small vocab |
+| 🥇 1st | **GMM** | trigram | 2000 | **0.9806** | **0.8945** - Strongest label alignment |
+| 🥈 2nd | **HNSW** | trigram | 5000 | 0.9136 | 0.7357 - graph geometry captures manifold structure |
+| 🥉 3rd | **KMeans** | trigram | 50 | 0.8963 | 0.3367 — small vocab forces tight cluster boundaries |
+| 4th | **FAISS PQ** | trigram | 50 | 0.6636 | 0.3352 — quantization loss at small vocab |
 
 ---
 
