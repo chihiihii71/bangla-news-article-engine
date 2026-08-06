@@ -297,27 +297,7 @@ This hybrid Spark ↔ sklearn ↔ FAISS/HNSWlib architecture is the core technic
 
 > **Dataset:** Kaggle `kamrun71/bangla-news`. Running requires a Kaggle environment or a local Spark cluster with ≥ 32 GB driver memory and the three CSV files mounted at `/kaggle/input/datasets/kamrun71/bangla-news/`.
 
----
 
-## ▶️ Reproducibility
-
-```bash
-# 1. Open in Kaggle (recommended — dataset auto-mounted)
-#    https://www.kaggle.com  →  Import notebook → Run All
-
-# 2. Or locally:
-pip install pyspark hnswlib faiss-cpu scipy scikit-learn matplotlib seaborn wordcloud unidecode
-
-# 3. Mount dataset at:  /kaggle/input/datasets/kamrun71/bangla-news/
-
-# 4. Run all cells top to bottom
-#    Sections 1–6   → preprocessing & feature engineering
-#    Section 7      → MinHashLSH duplicate detection + precision/recall
-#    Sections 8–12  → clustering experiments (all four algorithms)
-#    Section 14     → silhouette comparison charts
-
-# Expected: Silhouette ≈ 0.98 for GMM trigram vocab=1000–2000
-```
 
 ---
 
@@ -350,3 +330,24 @@ pip install pyspark hnswlib faiss-cpu scipy scikit-learn matplotlib seaborn word
 
 **Programming** — Python, Jupyter Notebook, Kaggle environment, pandas, matplotlib, seaborn
 
+---
+
+## ▶️ Reproducibility
+
+```bash
+# 1. Open in Kaggle (recommended — dataset auto-mounted)
+#    https://www.kaggle.com  →  Import notebook → Run All
+
+# 2. Or locally:
+pip install pyspark hnswlib faiss-cpu scipy scikit-learn matplotlib seaborn wordcloud unidecode
+
+# 3. Mount at Dataset
+
+# 4. Run all cells top to bottom
+#    Sections 1–6   → preprocessing & feature engineering
+#    Section 7      → MinHashLSH duplicate detection + precision/recall
+#    Sections 8–12  → clustering experiments (all four algorithms)
+#    Section 14     → silhouette comparison charts
+
+# Expected: Silhouette ≈ 0.98 for GMM trigram vocab=1000–2000
+```
