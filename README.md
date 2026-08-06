@@ -85,7 +85,7 @@ Silhouette Score measures internal cluster compactness and separation. Hungarian
 
 | Property | Detail |
 |---|---|
-| Source | Potrika Bangla News Corpus (Kaggle: `kamrun71/bangla-news`) |
+| Source | Potrika Bangla News Corpus |
 | Raw files | 3 × 40,000 CSV (National, Sports, Science & Technology) |
 | Working sample | 8,000 per category → **24,000 total** (balanced) |
 | Language | Bengali — Unicode range `\u0980–\u09FF` |
@@ -252,14 +252,18 @@ This hybrid Spark ↔ sklearn ↔ FAISS/HNSWlib architecture is the core technic
 
 ---
 
-## 🗂️ Repository Structure
+## 📂 Repository Structure
 
+```text
+TextArtifact-Scalable-Big-Data-NLP-Engine/
+├── figures/
+│   └── methodology-architecture.png          # End-to-end pipeline architecture
+├── .gitignore                                # Git ignore rules
+├── README.md                                 # Project documentation
+├── TextArtifact - Scalable Big Data NLP Engine.ipynb
+│                                              # Complete Spark NLP pipeline
+└── requirements.txt                          # Python dependencies
 ```
-├── notebook.ipynb        # Full pipeline — 14 sections, all experiments
-└── README.md             # This file
-```
-
-> **Dataset:** Kaggle `kamrun71/bangla-news`. Running requires a Kaggle environment or a local Spark cluster with ≥ 32 GB driver memory and the three CSV files mounted at `/kaggle/input/datasets/kamrun71/bangla-news/`.
 
 
 
