@@ -1,0 +1,11 @@
+pyspark
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+wordcloud
+unidecode
+hnswlib
+faiss-cpu
