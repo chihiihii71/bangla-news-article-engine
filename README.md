@@ -1,4 +1,4 @@
-# TextArtifact — Scalable Big Data NLP Engine
+# TextArtifact: Scalable Big Data NLP Engine
 
 **A production-grade distributed pipeline that automatically organises Bangla news articles into topic clusters — replacing hours of manual editorial work with a fully automated, scalable system.**
 
