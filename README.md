@@ -31,43 +31,7 @@ This project builds an end-to-end scalable analytics system that detects duplica
 
 ## 🏗️ Architecture
 
-```
-Potrika Bangla News CSVs  (3 categories × 40,000 articles)
-              ↓
-    Spark Data Loading & Balanced Sampling  (8,000 / class → 24,000 total)
-              ↓
-    Two-Pass Distributed Text Cleaning
-      Pass 1 → collapse embedded newlines, strip punctuation, remove zero-width Unicode
-      Pass 2 → remove URLs, strip English characters, normalise whitespace
-              ↓
-    Deduplication + Null Audit  (dropDuplicates, per-column empty-string check)
-              ↓
-    Bangla RegexTokenizer  (Unicode range \u0980–\u09FF, min token length > 2)
-              ↓
-    EDA  (vocabulary size, document-length histogram, top-20 tokens/bigrams/trigrams)
-              ↓
-    Deep Preprocessing  (Unicode normalisation, Bangla stopword removal)
-              ↓
-    N-Gram Feature Engineering  (Unigrams · Bigrams · Trigrams)
-              ↓
-    ┌─────────────────────────────────────────────────────────┐
-    │  MODULE 1 — Duplicate Detection                         │
-    │  HashingTF (binary, 2¹⁶ features) → MinHashLSH         │
-    │  Similarity Join (Jaccard ≥ threshold)                  │
-    │  ANN Search (top-5 per query)                           │
-    │  Precision / Recall vs Exact Jaccard Ground Truth       │
-    └─────────────────────────────────────────────────────────┘
-              ↓
-    ┌─────────────────────────────────────────────────────────┐
-    │  MODULE 2 — Topic Clustering                            │
-    │  CountVectorizer → TF-IDF → PCA                         │
-    │  K-Means  |  GMM  |  HNSW  |  FAISS Product Quantization│
-    │  Silhouette Score + Hungarian Algorithm Accuracy        │
-    │  t-SNE · Word Clouds · Cluster-Size Visualisations      │
-    └─────────────────────────────────────────────────────────┘
-              ↓
-    Best Configuration Identified → Business Insights
-```
+![Architecture](figures/TextArtifact-scalable-big-data-nlp-engine.png)
 
 ---
 
@@ -332,22 +296,24 @@ This hybrid Spark ↔ sklearn ↔ FAISS/HNSWlib architecture is the core technic
 
 ---
 
-## ▶️ Reproducibility
+## 🚀 Quick Start
 
 ```bash
-# 1. Open in Kaggle (recommended — dataset auto-mounted)
-#    https://www.kaggle.com  →  Import notebook → Run All
+# Clone repository
+git clone https://github.com/<your-username>/TextArtifact-Scalable-Big-Data-NLP-Engine.git
+cd TextArtifact-Scalable-Big-Data-NLP-Engine
 
-# 2. Or locally:
-pip install pyspark hnswlib faiss-cpu scipy scikit-learn matplotlib seaborn wordcloud unidecode
+# Install dependencies
+pip install -r requirements.txt
 
-# 3. Mount at Dataset
-
-# 4. Run all cells top to bottom
-#    Sections 1–6   → preprocessing & feature engineering
-#    Section 7      → MinHashLSH duplicate detection + precision/recall
-#    Sections 8–12  → clustering experiments (all four algorithms)
-#    Section 14     → silhouette comparison charts
-
-# Expected: Silhouette ≈ 0.98 for GMM trigram vocab=1000–2000
+# Launch Jupyter
+jupyter notebook
 ```
+
+Open:
+
+```
+TextArtifact - Scalable Big Data NLP Engine.ipynb
+```
+
+Run all notebook cells from top to bottom.
