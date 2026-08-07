@@ -6,7 +6,7 @@
 
 ## 🧩 Business Problem
 
-Publishing companies and news aggregators managing large Bangla-language archives face a critical operational challenge: articles arrive continuously across categories, but manual tagging and organisation is slow, expensive, and inconsistent.
+Publishing companies and news aggregators managing large Bangla-language archives face a critical operational challenge: articles arrive continuously across categories, but manual tagging and organisation are slow, expensive, and inconsistent.
 
 - Finding near-duplicate stories across news feeds wastes editorial bandwidth and inflates storage costs.
 - Without automated topic discovery, content recommendation and search relevance suffer.
